@@ -1,0 +1,21 @@
+[package]
+name = "rc-common"
+description = "Shared paths, logging, secrets, and game constants for Rift Coach"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dirs = "7.0.0"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56.0"
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+[
+  {
+    "leaguePoints": 63,
+    "losses": 54,
+    "puuid": "FIXTURE-PUUID-SELF",
+    "queueType": "RANKED_SOLO_5x5",
+    "rank": "III",
+    "tier": "BRONZE",
+    "wins": 42
+  },
+  {
+    "leaguePoints": 61,
+    "losses": 31,
+    "puuid": "FIXTURE-PUUID-SELF",
+    "queueType": "RANKED_FLEX_SR",
+    "rank": "IV",
+    "tier": "SILVER",
+    "wins": 22
+  }
+]

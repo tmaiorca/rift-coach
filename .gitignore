@@ -1,0 +1,53 @@
+# --- Secrets: never commit ---
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+secrets/
+**/riot_api_key*
+
+# --- Local app data / databases ---
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.duckdb
+data/
+cache/
+ddragon-cache/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Raw API captures (scrubbed fixtures live in tests/fixtures and ARE committed) ---
+raw-captures/
+
+# --- Build output ---
+target/
+dist/
+build/
+out/
+*.tsbuildinfo
+*.msi
+*.exe
+
+# --- Dependencies ---
+node_modules/
+.pnpm-store/
+.venv/
+__pycache__/
+
+# --- Editor / OS ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Claude Code local settings ---
+.claude/settings.local.json

@@ -1,0 +1,32 @@
+[
+  {
+    "championId": 61,
+    "championLevel": 24,
+    "championPoints": 229705,
+    "lastPlayTime": 1790455223000
+  },
+  {
+    "championId": 7,
+    "championLevel": 20,
+    "championPoints": 186638,
+    "lastPlayTime": 1791858238000
+  },
+  {
+    "championId": 910,
+    "championLevel": 15,
+    "championPoints": 143903,
+    "lastPlayTime": 1782260965000
+  },
+  {
+    "championId": 119,
+    "championLevel": 12,
+    "championPoints": 104828,
+    "lastPlayTime": 1790993830000
+  },
+  {
+    "championId": 69,
+    "championLevel": 7,
+    "championPoints": 46670,
+    "lastPlayTime": 1782527217000
+  }
+]

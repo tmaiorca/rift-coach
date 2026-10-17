@@ -1,0 +1,331 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d1119;
+  --panel: #151b27;
+  --panel-2: #1c2433;
+  --border: #263044;
+  --text: #e3e8f0;
+  --muted: #8a96aa;
+  --accent: #d6ac52;
+  --accent-2: #40c8c4;
+  --win: #4fb07a;
+  --loss: #d9605a;
+  --warn: #e0a84a;
+  --radius: 10px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+main {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 16px;
+  padding: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.brand {
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.panel h3 {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+input,
+select,
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+
+input:focus,
+select:focus {
+  outline: 2px solid var(--accent-2);
+  outline-offset: -1px;
+}
+
+.form-row input:first-child {
+  flex: 1 1 100%;
+}
+
+.form-row .count {
+  width: 80px;
+}
+
+button {
+  background: var(--accent);
+  color: #1a1408;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.banner {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-top: 8px;
+}
+
+.banner.error {
+  background: #3a1d1f;
+  color: #ffb4ae;
+}
+
+.banner.warn {
+  background: #3a2e17;
+  color: #ffd99a;
+}
+
+.pill {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--panel-2);
+}
+
+.key-ok {
+  background: #173426;
+  color: #8be0ad;
+}
+
+.key-unknown {
+  background: #1d2a3a;
+  color: #a9c6ea;
+}
+
+.key-missing,
+.key-rejected {
+  background: #3a1d1f;
+  color: #ffb4ae;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.stat {
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: 10px;
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.stat.bad .stat-value {
+  color: var(--loss);
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.limit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.routing {
+  width: 70px;
+  color: var(--muted);
+}
+
+.meter {
+  position: relative;
+  flex: 1;
+  height: 20px;
+  background: var(--panel-2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: #24524f;
+}
+
+.meter-text {
+  position: relative;
+  font-size: 11px;
+  padding-left: 6px;
+  line-height: 20px;
+}
+
+.log {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.failures {
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.table-wrap {
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+tr.dim td {
+  opacity: 0.55;
+}
+
+.champ {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.champ-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: inline-block;
+}
+
+.champ-icon.placeholder {
+  background: var(--panel-2);
+}
+
+.result {
+  font-weight: 600;
+}
+
+.result.win {
+  color: var(--win);
+}
+
+.result.loss {
+  color: var(--loss);
+}
+
+.result.remake {
+  color: var(--muted);
+}
+
+.deaths {
+  color: var(--loss);
+}

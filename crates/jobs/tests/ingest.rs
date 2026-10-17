@@ -1,0 +1,277 @@
+//! End-to-end ingestion against mock Riot and Data Dragon servers.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use rc_common::Secret;
+use rc_ddragon::DdragonCache;
+use rc_jobs::{Engine, EngineConfig, IdleOutcome, KeyStatus};
+use rc_riot::client::RetryPolicy;
+use rc_riot::{Platform, RateLimiter, RiotClient, RiotId};
+use rc_store::Db;
+use serde_json::{Value, json};
+use wiremock::matchers::{method, path, path_regex};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn synthetic_match(match_id: &str, me_puuid: &str) -> Value {
+    let participants: Vec<Value> = (1..=10)
+        .map(|i| {
+            let me = i == 4;
+            json!({
+                "participantId": i,
+                "puuid": if me { me_puuid.to_owned() } else { format!("p{i}") },
+                "riotIdGameName": if me { "Me".to_owned() } else { format!("Player{i}") },
+                "riotIdTagline": "NA1",
+                "teamId": if i <= 5 { 100 } else { 200 },
+                "championId": 103, "championName": "Ahri",
+                "teamPosition": "MIDDLE", "individualPosition": "MIDDLE",
+                "win": i <= 5, "kills": 4, "deaths": 3, "assists": 9, "champLevel": 15,
+                "goldEarned": 11000, "totalMinionsKilled": 180, "neutralMinionsKilled": 12, "visionScore": 22
+            })
+        })
+        .collect();
+    json!({
+        "metadata": {"matchId": match_id, "participants": []},
+        "info": {
+            "gameCreation": 1_700_000_000_000i64, "gameStartTimestamp": 1_700_000_000_000i64,
+            "gameEndTimestamp": 1_700_001_800_000i64, "gameDuration": 1800,
+            "gameMode": "CLASSIC", "gameType": "MATCHED_GAME", "gameVersion": "16.20.712.3456",
+            "mapId": 11, "queueId": 420, "platformId": "NA1", "participants": participants
+        }
+    })
+}
+
+fn synthetic_timeline(match_id: &str) -> Value {
+    json!({"metadata": {"matchId": match_id}, "info": {"frameInterval": 60000, "frames": [{}, {}, {}]}})
+}
+
+struct Harness {
+    riot: MockServer,
+    _ddragon: MockServer,
+    _dir: tempfile::TempDir,
+    db: Db,
+    engine: Arc<Engine>,
+}
+
+async fn harness(mount_account: bool) -> Harness {
+    let riot = MockServer::start().await;
+    if mount_account {
+        mount_account_ok(&riot, 5).await;
+    }
+    Mock::given(path("/lol/match/v5/matches/by-puuid/p-me/ids"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!(["NA1_3", "NA1_2", "NA1_1"])))
+        .mount(&riot)
+        .await;
+    for id in ["NA1_1", "NA1_2", "NA1_3"] {
+        Mock::given(path(format!("/lol/match/v5/matches/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(synthetic_match(id, "p-me")))
+            .expect(1)
+            .mount(&riot)
+            .await;
+        Mock::given(path(format!("/lol/match/v5/matches/{id}/timeline")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(synthetic_timeline(id)))
+            .expect(1)
+            .mount(&riot)
+            .await;
+    }
+
+    let ddragon = MockServer::start().await;
+    Mock::given(path("/api/versions.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!(["16.20.1"])))
+        .mount(&ddragon)
+        .await;
+    Mock::given(path_regex(r"^/cdn/16\.20\.1/data/en_US/.*\.json$"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"data":{}}"#))
+        .mount(&ddragon)
+        .await;
+
+    let dir = tempfile::tempdir().expect("tmp");
+    let db = Db::open(&dir.path().join("t.db")).expect("db");
+    let client = RiotClient::new(Some(Secret::new("RGAPI-test")), Arc::new(RateLimiter::personal_key()))
+        .expect("client")
+        .with_base_url(riot.uri().parse().expect("url"))
+        .with_retry_policy(RetryPolicy { rate_limited: 2, server: 1, base_backoff: Duration::from_millis(5) });
+    let cache = DdragonCache::with_base_url(dir.path().join("dd"), db.clone(), &ddragon.uri()).expect("dd");
+    let config = EngineConfig {
+        workers: 3,
+        idle_poll: Duration::from_millis(200),
+        base_backoff: Duration::from_millis(50),
+        max_backoff: Duration::from_millis(200),
+    };
+    let engine = Engine::new(db.clone(), Arc::new(client), Arc::new(cache), config);
+    engine.start().await.expect("start");
+    Harness { riot, _ddragon: ddragon, _dir: dir, db, engine }
+}
+
+async fn mount_account_ok(riot: &MockServer, priority: u8) {
+    Mock::given(path_regex(r"(?i)^/riot/account/v1/accounts/by-riot-id/me/na1$"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"puuid": "p-me", "gameName": "Me", "tagLine": "NA1"})),
+        )
+        .with_priority(priority)
+        .mount(riot)
+        .await;
+}
+
+async fn wait(engine: &Engine) -> IdleOutcome {
+    tokio::time::timeout(Duration::from_secs(20), engine.wait_idle()).await.expect("timed out").expect("store")
+}
+
+#[tokio::test]
+async fn ingests_matches_and_timelines_once() {
+    let h = harness(true).await;
+    // Lowercase on purpose: Riot's casing is stored after resolving.
+    let me = h.engine.track_and_ingest(&RiotId::new("me", "na1"), Platform::Na1, 100).await.expect("track");
+    assert_eq!(wait(&h.engine).await, IdleOutcome::Drained);
+
+    let (counts, list, account) =
+        h.db.with(|c| {
+            Ok((
+                rc_store::matches::account_match_counts(c, me)?,
+                rc_store::matches::list_account_matches(c, me, 10, 0)?,
+                rc_store::accounts::get_account(c, me)?,
+            ))
+        })
+        .expect("q");
+    assert_eq!((counts.matches, counts.with_timeline), (3, 3));
+    assert_eq!(list[0].cs, 192, "cs = lane minions + neutral");
+    assert!(list.iter().all(|m| m.win && m.has_timeline && m.patch == "16.20"));
+    assert_eq!(account.map(|a| (a.game_name, a.tag_line)), Some(("Me".into(), "NA1".into())));
+    let status = h.engine.status().await.expect("status");
+    assert!(status.recent_failures.is_empty(), "{:?}", status.recent_failures);
+    assert!(h.db.with(|c| rc_store::ddragon::is_complete(c, "16.20.1")).expect("q"));
+    assert_eq!(h.engine.key_status(), KeyStatus::Ok);
+
+    // Re-running fetches no match or timeline again (mocks expect(1)).
+    h.engine.track_and_ingest(&RiotId::new("Me", "NA1"), Platform::Na1, 100).await.expect("track");
+    assert_eq!(wait(&h.engine).await, IdleOutcome::Drained);
+    let status = h.engine.status().await.expect("status");
+    assert_eq!(status.jobs.failed, 0);
+    h.riot.verify().await;
+}
+
+#[tokio::test]
+async fn retries_a_match_that_is_not_published_yet() {
+    let riot_404_first = harness(true).await;
+    Mock::given(method("GET"))
+        .and(path("/lol/match/v5/matches/NA1_2"))
+        .respond_with(ResponseTemplate::new(404))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&riot_404_first.riot)
+        .await;
+    let me = riot_404_first.engine.track_and_ingest(&RiotId::new("Me", "NA1"), Platform::Na1, 3).await.expect("track");
+    assert_eq!(wait(&riot_404_first.engine).await, IdleOutcome::Drained);
+    let counts = riot_404_first.db.with(|c| rc_store::matches::account_match_counts(c, me)).expect("q");
+    assert_eq!(counts.matches, 3);
+}
+
+#[tokio::test]
+async fn pauses_on_rejected_key_and_resumes_with_a_new_one() {
+    let h = harness(false).await;
+    Mock::given(path("/riot/account/v1/accounts/by-riot-id/Me/NA1"))
+        .respond_with(ResponseTemplate::new(403))
+        .with_priority(5)
+        .mount(&h.riot)
+        .await;
+    let me = h.engine.track_and_ingest(&RiotId::new("Me", "NA1"), Platform::Na1, 3).await.expect("track");
+    assert_eq!(wait(&h.engine).await, IdleOutcome::KeyProblem(KeyStatus::Rejected));
+    let status = h.engine.status().await.expect("status");
+    assert_eq!(status.jobs.pending(), 1, "job kept, not failed");
+    assert_eq!(status.jobs.failed, 0);
+
+    // User fixes the key; the account endpoint now succeeds.
+    Mock::given(path("/riot/account/v1/accounts/by-riot-id/Me/NA1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"puuid": "p-me", "gameName": "Me", "tagLine": "NA1"})),
+        )
+        .with_priority(1)
+        .mount(&h.riot)
+        .await;
+    h.engine.set_key(Some(Secret::new("RGAPI-new")));
+    assert_eq!(wait(&h.engine).await, IdleOutcome::Drained);
+    let counts = h.db.with(|c| rc_store::matches::account_match_counts(c, me)).expect("q");
+    assert_eq!(counts.matches, 3);
+}
+
+/// Replays the recorded (scrubbed) real responses through the whole pipeline.
+#[tokio::test]
+async fn ingests_recorded_fixtures() {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/riot");
+    let read = |rel: &str| std::fs::read(dir.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+    let ids: Vec<String> = serde_json::from_slice(&read("match-ids.json")).expect("ids");
+
+    let riot = MockServer::start().await;
+    Mock::given(path("/riot/account/v1/accounts/by-riot-id/TapRooted/BTC"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(read("account.json")))
+        .mount(&riot)
+        .await;
+    Mock::given(path("/lol/match/v5/matches/by-puuid/FIXTURE-PUUID-SELF/ids"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(read("match-ids.json")))
+        .mount(&riot)
+        .await;
+    for id in &ids {
+        Mock::given(path(format!("/lol/match/v5/matches/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(read(&format!("matches/{id}.json"))))
+            .mount(&riot)
+            .await;
+        Mock::given(path(format!("/lol/match/v5/matches/{id}/timeline")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(read(&format!("timelines/{id}.json"))))
+            .mount(&riot)
+            .await;
+    }
+    let ddragon = MockServer::start().await;
+    Mock::given(method("GET")).respond_with(ResponseTemplate::new(503)).mount(&ddragon).await;
+
+    let tmp = tempfile::tempdir().expect("tmp");
+    let db = Db::open(&tmp.path().join("t.db")).expect("db");
+    let client = RiotClient::new(Some(Secret::new("RGAPI-test")), Arc::new(RateLimiter::personal_key()))
+        .expect("client")
+        .with_base_url(riot.uri().parse().expect("url"));
+    let cache = DdragonCache::with_base_url(tmp.path().join("dd"), db.clone(), &ddragon.uri()).expect("dd");
+    let config = EngineConfig {
+        workers: 2,
+        idle_poll: Duration::from_millis(200),
+        // Data Dragon is down in this test; let its job fail fast.
+        base_backoff: Duration::from_millis(1),
+        max_backoff: Duration::from_millis(5),
+    };
+    let engine = Engine::new(db.clone(), Arc::new(client), Arc::new(cache), config);
+    engine.start().await.expect("start");
+
+    let me = engine.track_and_ingest(&RiotId::new("TapRooted", "BTC"), Platform::Na1, 20).await.expect("track");
+    assert_eq!(wait(&engine).await, IdleOutcome::Drained);
+
+    let (counts, list) = db
+        .with(|c| {
+            Ok((
+                rc_store::matches::account_match_counts(c, me)?,
+                rc_store::matches::list_account_matches(c, me, 50, 0)?,
+            ))
+        })
+        .expect("q");
+    assert_eq!(counts.matches as usize, ids.len());
+    assert_eq!(counts.with_timeline as usize, ids.len());
+    let listed: Vec<_> = list.iter().map(|m| m.match_id.clone()).collect();
+    assert_eq!(listed, ids, "newest first, same order Riot returned");
+    // Stored raw JSON round-trips byte-for-byte.
+    let raw = db
+        .with(|c| rc_store::matches::get_raw(c, &ids[0], rc_store::matches::RawKind::Timeline))
+        .expect("q")
+        .expect("raw");
+    assert_eq!(raw, read(&format!("timelines/{}.json", ids[0])));
+    // Only the Data Dragon job (mock is down) failed.
+    let failures = engine.status().await.expect("status").recent_failures;
+    assert!(failures.iter().all(|f| f.kind == "ddragon_sync"), "{failures:?}");
+}
+
+#[tokio::test]
+async fn missing_key_blocks_without_calling_riot() {
+    let h = harness(true).await;
+    h.engine.set_key(None);
+    h.engine.track_and_ingest(&RiotId::new("Me", "NA1"), Platform::Na1, 3).await.expect("track");
+    assert_eq!(wait(&h.engine).await, IdleOutcome::KeyProblem(KeyStatus::Missing));
+    assert!(h.riot.received_requests().await.unwrap_or_default().is_empty());
+    // Drop the harness's expect(1) mocks; nothing was supposed to be fetched.
+    h.riot.reset().await;
+}

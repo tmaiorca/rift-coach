@@ -1,0 +1,364 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use rc_common::Secret;
+use rc_common::time::now_ms;
+use rc_ddragon::DdragonCache;
+use rc_riot::limiter::BucketSnapshot;
+use rc_riot::{Platform, RiotClient, RiotId};
+use rc_store::jobs::{self as q, ClaimedJob, FailedJob, JobCounts, NewJob};
+use rc_store::{Db, StoreError};
+use serde::Serialize;
+use tokio::sync::{Notify, broadcast};
+use tokio::task::JoinHandle;
+
+use crate::handlers::JobError;
+use crate::job::Job;
+
+#[derive(Debug, Clone)]
+pub struct EngineConfig {
+    /// Concurrent workers. The rate limiter is the real throttle; a few
+    /// workers just keep requests in flight while others wait on it.
+    pub workers: usize,
+    /// Longest a worker sleeps without checking the queue.
+    pub idle_poll: Duration,
+    /// First retry delay; doubles per attempt up to `max_backoff`.
+    pub base_backoff: Duration,
+    pub max_backoff: Duration,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            workers: 3,
+            idle_poll: Duration::from_secs(30),
+            base_backoff: Duration::from_secs(15),
+            max_backoff: Duration::from_secs(30 * 60),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyStatus {
+    /// No call made yet with the current key.
+    Unknown,
+    Ok,
+    Missing,
+    /// 401/403: invalid, revoked, or expired. Work pauses until the key changes.
+    Rejected,
+}
+
+impl KeyStatus {
+    fn blocks_work(self) -> bool {
+        matches!(self, Self::Missing | Self::Rejected)
+    }
+}
+
+/// Progress notifications for the UI and CLI.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EngineEvent {
+    JobStarted { kind: String, label: String },
+    JobSucceeded { kind: String, label: String },
+    JobRetrying { kind: String, label: String, error: String, retry_in_s: u64 },
+    JobFailed { kind: String, label: String, error: String },
+    MatchStored { match_id: String },
+    TimelineStored { match_id: String },
+    KeyStatusChanged { status: KeyStatus },
+    KeyGenerationChanged { key_gen_id: i64 },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EngineStatus {
+    pub key_status: KeyStatus,
+    pub paused: bool,
+    pub jobs: JobCounts,
+    pub rate_limits: Vec<BucketSnapshot>,
+    pub recent_failures: Vec<FailedJob>,
+}
+
+/// Why [`Engine::wait_idle`] returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdleOutcome {
+    Drained,
+    KeyProblem(KeyStatus),
+}
+
+pub struct Engine {
+    pub(crate) db: Db,
+    pub(crate) riot: Arc<RiotClient>,
+    pub(crate) ddragon: Arc<DdragonCache>,
+    config: EngineConfig,
+    events: broadcast::Sender<EngineEvent>,
+    wake: Notify,
+    key_status: Mutex<KeyStatus>,
+    paused: AtomicBool,
+}
+
+impl Engine {
+    pub fn new(db: Db, riot: Arc<RiotClient>, ddragon: Arc<DdragonCache>, config: EngineConfig) -> Arc<Self> {
+        let key_status = if riot.has_key() { KeyStatus::Unknown } else { KeyStatus::Missing };
+        Arc::new(Self {
+            db,
+            riot,
+            ddragon,
+            config,
+            events: broadcast::channel(1024).0,
+            wake: Notify::new(),
+            key_status: Mutex::new(key_status),
+            paused: AtomicBool::new(false),
+        })
+    }
+
+    pub fn db(&self) -> &Db {
+        &self.db
+    }
+
+    pub fn ddragon(&self) -> &Arc<DdragonCache> {
+        &self.ddragon
+    }
+
+    pub fn riot(&self) -> &Arc<RiotClient> {
+        &self.riot
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<EngineEvent> {
+        self.events.subscribe()
+    }
+
+    pub(crate) fn emit(&self, event: EngineEvent) {
+        // No receivers is fine.
+        let _ = self.events.send(event);
+    }
+
+    /// Re-queues jobs interrupted by a crash, then starts the workers.
+    pub async fn start(self: &Arc<Self>) -> Result<Vec<JoinHandle<()>>, StoreError> {
+        let recovered = self.db.call(|c| q::recover_running(c, now_ms())).await?;
+        if recovered > 0 {
+            tracing::info!(recovered, "re-queued jobs interrupted by the last shutdown");
+        }
+        Ok((0..self.config.workers.max(1))
+            .map(|i| {
+                let engine = self.clone();
+                tokio::spawn(async move { engine.worker_loop(i).await })
+            })
+            .collect())
+    }
+
+    pub async fn enqueue(&self, job: Job) -> Result<bool, StoreError> {
+        let added = self.enqueue_many(vec![job]).await? > 0;
+        Ok(added)
+    }
+
+    pub async fn enqueue_many(&self, jobs: Vec<Job>) -> Result<usize, StoreError> {
+        let rows = jobs
+            .iter()
+            .map(|j| {
+                Ok(NewJob {
+                    kind: j.kind().to_owned(),
+                    payload: serde_json::to_string(j)?,
+                    priority: j.priority(),
+                    dedupe_key: j.dedupe_key(),
+                    run_at_ms: now_ms(),
+                    max_attempts: j.max_attempts(),
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let added = self
+            .db
+            .call(move |c| {
+                let tx = c.transaction()?;
+                let now = now_ms();
+                let mut added = 0;
+                for row in &rows {
+                    added += usize::from(q::enqueue(&tx, row, now)?);
+                }
+                tx.commit()?;
+                Ok(added)
+            })
+            .await?;
+        if added > 0 {
+            self.wake.notify_waiters();
+        }
+        Ok(added)
+    }
+
+    /// Starts tracking a Riot ID (if new) and queues ingestion of its newest
+    /// `count` matches. Returns the account id.
+    pub async fn track_and_ingest(&self, riot_id: &RiotId, platform: Platform, count: u32) -> Result<i64, StoreError> {
+        let (name, tag) = (riot_id.game_name.clone(), riot_id.tag_line.clone());
+        let account_id = self
+            .db
+            .call(move |c| {
+                rc_store::accounts::upsert_account(
+                    c,
+                    &name,
+                    &tag,
+                    platform.as_str(),
+                    platform.match_region().as_str(),
+                    false,
+                )
+            })
+            .await?;
+        self.enqueue(Job::ResolveAccount { account_id, then_sync: Some(count) }).await?;
+        Ok(account_id)
+    }
+
+    pub fn key_status(&self) -> KeyStatus {
+        *self.key_status.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn set_key_status(&self, status: KeyStatus) {
+        let changed = {
+            let mut cur = self.key_status.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let changed = *cur != status;
+            *cur = status;
+            changed
+        };
+        if changed {
+            tracing::info!(?status, "API key status changed");
+            self.emit(EngineEvent::KeyStatusChanged { status });
+            if !status.blocks_work() {
+                self.wake.notify_waiters();
+            }
+        }
+    }
+
+    /// Swap the API key (e.g. after the user fixes it) and resume work.
+    pub fn set_key(&self, key: Option<Secret>) {
+        let status = if key.is_some() { KeyStatus::Unknown } else { KeyStatus::Missing };
+        self.riot.set_key(key);
+        self.set_key_status(status);
+    }
+
+    /// Pause/resume all background work (used by game-aware scheduling).
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::SeqCst);
+        if !paused {
+            self.wake.notify_waiters();
+        }
+    }
+
+    fn blocked(&self) -> bool {
+        self.paused.load(Ordering::SeqCst) || self.key_status().blocks_work()
+    }
+
+    pub async fn status(&self) -> Result<EngineStatus, StoreError> {
+        let (jobs, recent_failures) =
+            self.db.call(|c| Ok((q::counts(c, now_ms())?, q::recent_failures(c, 10)?))).await?;
+        Ok(EngineStatus {
+            key_status: self.key_status(),
+            paused: self.paused.load(Ordering::SeqCst),
+            jobs,
+            rate_limits: self.riot.limiter().snapshot(),
+            recent_failures,
+        })
+    }
+
+    /// Resolves when no jobs are pending, or work is blocked on the key.
+    pub async fn wait_idle(&self) -> Result<IdleOutcome, StoreError> {
+        loop {
+            let status = self.key_status();
+            if status.blocks_work() {
+                return Ok(IdleOutcome::KeyProblem(status));
+            }
+            if self.db.call(|c| q::counts(c, now_ms())).await?.pending() == 0 {
+                return Ok(IdleOutcome::Drained);
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+
+    async fn worker_loop(self: Arc<Self>, worker: usize) {
+        tracing::debug!(worker, "worker started");
+        loop {
+            // Register for wake-ups *before* checking, so an enqueue between
+            // the check and the wait isn't missed.
+            let notified = self.wake.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            let sleep_for = if self.blocked() {
+                Some(self.config.idle_poll)
+            } else {
+                match self.db.call(|c| q::claim_next(c, now_ms())).await {
+                    Ok(Some(job)) => {
+                        self.run(job).await;
+                        None
+                    }
+                    Ok(None) => {
+                        let next = self.db.call(|c| q::next_due_at(c)).await.ok().flatten();
+                        let until_due = next.map(|t| Duration::from_millis((t - now_ms()).max(0) as u64));
+                        Some(until_due.map_or(self.config.idle_poll, |d| d.min(self.config.idle_poll)))
+                    }
+                    Err(e) => {
+                        tracing::error!(worker, error = %e, "could not claim a job");
+                        Some(Duration::from_secs(5))
+                    }
+                }
+            };
+            if let Some(d) = sleep_for {
+                tokio::select! {
+                    () = &mut notified => {}
+                    () = tokio::time::sleep(d) => {}
+                }
+            }
+        }
+    }
+
+    fn backoff(&self, attempt: i32) -> Duration {
+        let exp = u32::try_from(attempt.saturating_sub(1)).unwrap_or(0).min(16);
+        (self.config.base_backoff * 2u32.pow(exp)).min(self.config.max_backoff)
+    }
+
+    async fn run(&self, claimed: ClaimedJob) {
+        let id = claimed.id;
+        let job: Job = match serde_json::from_str(&claimed.payload) {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::error!(id, kind = claimed.kind, error = %e, "unreadable job payload");
+                let msg = format!("unreadable payload: {e}");
+                let _ = self.db.call(move |c| q::fail(c, id, &msg, now_ms())).await;
+                return;
+            }
+        };
+        let (kind, label) = (job.kind().to_owned(), job.label());
+        tracing::debug!(id, kind, label, attempt = claimed.attempts, "job started");
+        self.emit(EngineEvent::JobStarted { kind: kind.clone(), label: label.clone() });
+
+        let result = self.handle(&job).await;
+        let now = now_ms();
+        let outcome = match result {
+            Ok(()) => {
+                if job.uses_riot_api() {
+                    self.set_key_status(KeyStatus::Ok);
+                }
+                tracing::info!(kind, label, "job done");
+                self.emit(EngineEvent::JobSucceeded { kind, label });
+                self.db.call(move |c| q::complete(c, id, now)).await
+            }
+            Err(JobError::Key(status)) => {
+                self.set_key_status(status);
+                let msg = format!("waiting for a valid API key ({status:?})");
+                self.db.call(move |c| q::requeue_without_attempt(c, id, now, &msg, now)).await
+            }
+            Err(JobError::Retry(msg)) if claimed.attempts < claimed.max_attempts => {
+                let delay = self.backoff(claimed.attempts);
+                tracing::warn!(kind, label, error = msg, retry_in_s = delay.as_secs(), "job will retry");
+                self.emit(EngineEvent::JobRetrying { kind, label, error: msg.clone(), retry_in_s: delay.as_secs() });
+                let run_at = now + i64::try_from(delay.as_millis()).unwrap_or(i64::MAX);
+                self.db.call(move |c| q::retry_later(c, id, run_at, &msg, now)).await
+            }
+            Err(JobError::Retry(msg) | JobError::Permanent(msg)) => {
+                tracing::error!(kind, label, error = msg, "job failed");
+                self.emit(EngineEvent::JobFailed { kind, label, error: msg.clone() });
+                self.db.call(move |c| q::fail(c, id, &msg, now)).await
+            }
+        };
+        if let Err(e) = outcome {
+            tracing::error!(id, error = %e, "could not record job outcome");
+        }
+    }
+}
