@@ -6,8 +6,10 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+rc-coach = { version = "0.1.0", path = "../coach" }
 rc-common = { version = "0.1.0", path = "../common" }
 rc-ddragon = { version = "0.1.0", path = "../ddragon" }
+rc-metrics = { version = "0.1.0", path = "../metrics" }
 rc-riot = { version = "0.1.0", path = "../riot" }
 rc-store = { version = "0.1.0", path = "../store" }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -20,6 +22,7 @@ tracing = "0.1.44"
 workspace = true
 
 [dev-dependencies]
+rc-ai = { version = "0.1.0", path = "../ai" }
 tempfile = "3.27.0"
 tokio = { version = "1.53.3", features = ["full"] }
 wiremock = "0.6.5"

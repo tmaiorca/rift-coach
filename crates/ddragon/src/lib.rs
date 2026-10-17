@@ -57,7 +57,7 @@ pub fn version_for_patch<'a>(versions: &'a [String], patch: &str) -> Option<&'a 
     versions.iter().find(|v| patch_key(v) == patch).or_else(|| versions.first()).map(String::as_str)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ChampionInfo {
     /// Data Dragon id, e.g. `MonkeyKing`.
     pub id: String,
@@ -78,6 +78,10 @@ impl ChampionIndex {
 
     pub fn len(&self) -> usize {
         self.by_key.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (i32, &ChampionInfo)> {
+        self.by_key.iter().map(|(k, v)| (*k, v))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -264,6 +268,78 @@ impl DdragonCache {
         }
         Ok(path)
     }
+}
+
+impl DdragonCache {
+    /// Downloads `cdn_path` to `local` once, then serves the local copy.
+    async fn cached(&self, cdn_path: &str, local: PathBuf) -> Result<PathBuf> {
+        if !local.exists() {
+            let body = self.fetch(cdn_path).await?;
+            write_atomic(&local, &body).await?;
+        }
+        Ok(local)
+    }
+
+    pub async fn item_icon(&self, version: &str, item_id: i32) -> Result<PathBuf> {
+        if item_id <= 0 || !is_release_version(version) {
+            return Err(DdragonError::Invalid(format!("bad item {item_id} / version {version}")));
+        }
+        let local = self.dir.join(version).join("img").join("item").join(format!("{item_id}.png"));
+        self.cached(&format!("cdn/{version}/img/item/{item_id}.png"), local).await
+    }
+
+    /// Icon for a summoner spell by its numeric key (e.g. 4 = Flash).
+    pub async fn summoner_spell_icon(&self, version: &str, spell_key: i32) -> Result<PathBuf> {
+        #[derive(Deserialize)]
+        struct File {
+            data: HashMap<String, Spell>,
+        }
+        #[derive(Deserialize)]
+        struct Spell {
+            key: String,
+            image: Image,
+        }
+        #[derive(Deserialize)]
+        struct Image {
+            full: String,
+        }
+        let file: File = serde_json::from_slice(&self.data_file(version, "summoner.json").await?)?;
+        let image = file
+            .data
+            .into_values()
+            .find(|s| s.key == spell_key.to_string())
+            .map(|s| s.image.full)
+            .ok_or_else(|| DdragonError::Invalid(format!("unknown summoner spell {spell_key}")))?;
+        if !safe_name(&image) {
+            return Err(DdragonError::Invalid(format!("suspicious image name '{image}'")));
+        }
+        let local = self.dir.join(version).join("img").join("spell").join(&image);
+        self.cached(&format!("cdn/{version}/img/spell/{image}"), local).await
+    }
+
+    /// Full splash art (`<id>_0.jpg`) for a champion's Data Dragon id
+    /// (e.g. `Leblanc`). Splashes aren't versioned.
+    pub async fn champion_splash(&self, ddragon_id: &str) -> Result<PathBuf> {
+        if ddragon_id.is_empty() || !ddragon_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(DdragonError::Invalid(format!("bad champion id '{ddragon_id}'")));
+        }
+        let file = format!("{ddragon_id}_0.jpg");
+        let local = self.dir.join("splash").join(&file);
+        self.cached(&format!("cdn/img/champion/splash/{file}"), local).await
+    }
+
+    /// Summoner's Rift minimap image.
+    pub async fn minimap(&self, version: &str) -> Result<PathBuf> {
+        if !is_release_version(version) {
+            return Err(DdragonError::Invalid(format!("invalid version '{version}'")));
+        }
+        let local = self.dir.join(version).join("img").join("map").join("map11.png");
+        self.cached(&format!("cdn/{version}/img/map/map11.png"), local).await
+    }
+}
+
+fn safe_name(file: &str) -> bool {
+    !file.is_empty() && !file.contains(['/', '\\']) && !file.contains("..")
 }
 
 /// Write to a temp file then rename, so a crash never leaves a half file.

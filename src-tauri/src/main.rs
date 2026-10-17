@@ -31,6 +31,10 @@ fn main() {
     let engine = rc_jobs::build_engine(&paths, key, EngineConfig::default()).expect("cannot open the database");
 
     tauri::Builder::default()
+        // Remembers window size and position between runs.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Opens external links (the Guide) in the default browser.
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState { engine: engine.clone(), paths, key_source: Mutex::new(key_source) })
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -58,10 +62,37 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::recent_activity,
             commands::start_ingest,
+            commands::list_accounts,
+            commands::set_active_account,
+            commands::set_primary_account,
+            commands::remove_account,
             commands::list_matches,
-            commands::champion_icon,
+            commands::match_detail,
+            commands::dashboard,
+            commands::metric_definitions,
+            commands::generate_review,
+            commands::review_facts,
+            commands::list_reports,
+            commands::ai_providers,
+            commands::set_ai_key,
+            commands::delete_ai_key,
+            commands::list_ai_models,
+            commands::test_ai,
+            commands::get_settings,
+            commands::save_settings,
+            commands::get_ui_state,
+            commands::save_ui_state,
             commands::reload_key,
+            commands::set_riot_key,
+            commands::delete_riot_key,
+            commands::champions,
+            commands::champion_icon,
+            commands::item_icon,
+            commands::spell_icon,
+            commands::champion_splash,
+            commands::minimap,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Rift Coach");

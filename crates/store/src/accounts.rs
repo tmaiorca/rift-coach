@@ -85,6 +85,30 @@ pub fn list_accounts(conn: &Connection) -> Result<Vec<Account>> {
     Ok(rows)
 }
 
+pub fn set_primary(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("UPDATE accounts SET is_primary = (id = ?1), updated_at = ?2", params![id, now_ms()])?;
+    Ok(())
+}
+
+/// Stops tracking an account: its PUUIDs, match links and AI reports go,
+/// the matches themselves stay. Another account becomes primary if needed.
+pub fn delete_account(conn: &mut Connection, id: i64) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM accounts WHERE id = ?1", [id])?;
+    let has_primary: bool =
+        tx.query_row("SELECT EXISTS(SELECT 1 FROM accounts WHERE is_primary = 1)", [], |r| r.get(0))?;
+    if !has_primary {
+        tx.execute("UPDATE accounts SET is_primary = 1 WHERE id = (SELECT MIN(id) FROM accounts)", [])?;
+    }
+    let mut s = crate::settings::app(&tx)?;
+    if s.active_account_id == Some(id) {
+        s.active_account_id = None;
+        crate::settings::set(&tx, crate::settings::APP, &s)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Store Riot's canonical casing of the Riot ID.
 pub fn update_riot_id(conn: &Connection, id: i64, game_name: &str, tag_line: &str) -> Result<()> {
     conn.execute(

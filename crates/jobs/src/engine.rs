@@ -1,10 +1,12 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rc_common::Secret;
 use rc_common::time::now_ms;
-use rc_ddragon::DdragonCache;
+use rc_ddragon::{DdragonCache, DdragonError};
+use rc_metrics::ItemCatalog;
 use rc_riot::limiter::BucketSnapshot;
 use rc_riot::{Platform, RiotClient, RiotId};
 use rc_store::jobs::{self as q, ClaimedJob, FailedJob, JobCounts, NewJob};
@@ -51,6 +53,15 @@ pub enum KeyStatus {
 }
 
 impl KeyStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unknown => "loaded",
+            Self::Ok => "OK",
+            Self::Missing => "missing",
+            Self::Rejected => "rejected",
+        }
+    }
+
     fn blocks_work(self) -> bool {
         matches!(self, Self::Missing | Self::Rejected)
     }
@@ -68,6 +79,29 @@ pub enum EngineEvent {
     TimelineStored { match_id: String },
     KeyStatusChanged { status: KeyStatus },
     KeyGenerationChanged { key_gen_id: i64 },
+    MetricsComputed { match_id: String },
+    ReviewReady { match_id: String, report_id: i64 },
+}
+
+impl EngineEvent {
+    /// A line for the persisted activity feed, if this event deserves one.
+    pub fn describe(&self) -> Option<(&'static str, String)> {
+        Some(match self {
+            Self::MatchStored { match_id } => ("info", format!("Stored match {match_id}")),
+            Self::TimelineStored { match_id } => ("info", format!("Stored timeline {match_id}")),
+            Self::JobRetrying { label, error, retry_in_s, .. } => {
+                ("warn", format!("Retrying {label} in {retry_in_s}s: {error}"))
+            }
+            Self::JobFailed { label, error, .. } => ("error", format!("Failed: {label}: {error}")),
+            Self::KeyStatusChanged { status } => (
+                if matches!(status, KeyStatus::Ok | KeyStatus::Unknown) { "info" } else { "error" },
+                format!("Riot API key status: {}", status.label()),
+            ),
+            Self::KeyGenerationChanged { .. } => ("warn", "Riot API key changed; re-resolving accounts".into()),
+            Self::ReviewReady { match_id, .. } => ("info", format!("AI review ready for {match_id}")),
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,6 +129,7 @@ pub struct Engine {
     wake: Notify,
     key_status: Mutex<KeyStatus>,
     paused: AtomicBool,
+    items: Mutex<HashMap<String, Arc<ItemCatalog>>>,
 }
 
 impl Engine {
@@ -109,6 +144,7 @@ impl Engine {
             wake: Notify::new(),
             key_status: Mutex::new(key_status),
             paused: AtomicBool::new(false),
+            items: Mutex::new(HashMap::new()),
         })
     }
 
@@ -133,12 +169,54 @@ impl Engine {
         let _ = self.events.send(event);
     }
 
-    /// Re-queues jobs interrupted by a crash, then starts the workers.
+    /// Adds a line to the persisted activity feed.
+    pub async fn log_activity(&self, level: &'static str, message: impl Into<String>) {
+        let message = message.into();
+        if let Err(e) = self.db.call(move |c| rc_store::activity::add(c, level, &message)).await {
+            tracing::warn!(error = %e, "could not record activity");
+        }
+    }
+
+    /// Item prices/names for a game patch, from the Data Dragon cache.
+    pub async fn item_catalog(&self, patch: &str) -> Result<Arc<ItemCatalog>, DdragonError> {
+        let version = self.ddragon.version_for_patch(patch).await?;
+        if let Some(c) = self.items.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&version) {
+            return Ok(c.clone());
+        }
+        let raw = self.ddragon.data_file(&version, "item.json").await?;
+        let catalog = Arc::new(ItemCatalog::from_ddragon_json(&raw)?);
+        self.items.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(version, catalog.clone());
+        Ok(catalog)
+    }
+
+    /// Re-queues jobs interrupted by a crash, queues metrics for matches that
+    /// need them, starts the activity recorder, then starts the workers.
     pub async fn start(self: &Arc<Self>) -> Result<Vec<JoinHandle<()>>, StoreError> {
         let recovered = self.db.call(|c| q::recover_running(c, now_ms())).await?;
         if recovered > 0 {
             tracing::info!(recovered, "re-queued jobs interrupted by the last shutdown");
         }
+        let stale = self.db.call(|c| rc_store::metrics::stale_matches(c, rc_metrics::METRICS_VERSION)).await?;
+        if !stale.is_empty() {
+            tracing::info!(matches = stale.len(), "queueing metrics computation");
+            self.enqueue_many(stale.into_iter().map(|match_id| Job::ComputeMetrics { match_id }).collect()).await?;
+        }
+        let recorder = self.clone();
+        let mut events = self.subscribe();
+        tokio::spawn(async move {
+            use tokio::sync::broadcast::error::RecvError;
+            loop {
+                match events.recv().await {
+                    Ok(ev) => {
+                        if let Some((level, msg)) = ev.describe() {
+                            recorder.log_activity(level, msg).await;
+                        }
+                    }
+                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        });
         Ok((0..self.config.workers.max(1))
             .map(|i| {
                 let engine = self.clone();

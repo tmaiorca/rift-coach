@@ -1,17 +1,21 @@
 //! Job implementations. Each is idempotent: re-running a finished job only
 //! re-checks what's stored.
 
+use std::sync::Arc;
+
 use rc_riot::client::MatchIdQuery;
 use rc_riot::dto::{MatchDto, TimelineDto, patch_of};
 use rc_riot::{Platform, RiotError, RiotId};
 use rc_store::accounts::{self, PuuidOutcome};
-use rc_store::matches::{self, NewMatch, NewParticipant};
+use rc_store::matches::{self, NewMatch, NewParticipant, RawKind};
 
 use crate::engine::{Engine, EngineEvent, KeyStatus};
 use crate::job::Job;
 
 /// Riot caps Match-V5 `ids` at 100 per page.
 const MATCH_PAGE: u32 = 100;
+/// Auto reviews only cover games that ended this recently.
+const AUTO_REVIEW_MAX_AGE_MS: i64 = 6 * 3600 * 1000;
 
 #[derive(Debug)]
 pub(crate) enum JobError {
@@ -58,6 +62,8 @@ impl Engine {
             Job::FetchMatch { match_id } => self.fetch_match(match_id).await,
             Job::FetchTimeline { match_id } => self.fetch_timeline(match_id).await,
             Job::DdragonSync { patch } => self.ddragon_sync(patch).await,
+            Job::ComputeMetrics { match_id } => self.compute_metrics(match_id).await,
+            Job::AiReview { account_id, match_id } => self.ai_review(*account_id, match_id).await,
         }
     }
 
@@ -201,8 +207,12 @@ impl Engine {
             })
             .await?;
         self.emit(EngineEvent::MatchStored { match_id: match_id.to_owned() });
-        self.enqueue_many(vec![Job::FetchTimeline { match_id: match_id.to_owned() }, Job::DdragonSync { patch }])
-            .await?;
+        self.enqueue_many(vec![
+            Job::FetchTimeline { match_id: match_id.to_owned() },
+            Job::DdragonSync { patch },
+            Job::ComputeMetrics { match_id: match_id.to_owned() },
+        ])
+        .await?;
         Ok(())
     }
 
@@ -223,7 +233,108 @@ impl Engine {
         self.db.call(move |c| matches::insert_timeline(c, &id, &raw)).await?;
         tracing::debug!(match_id, frames = dto.info.frames.len(), "timeline stored");
         self.emit(EngineEvent::TimelineStored { match_id: match_id.to_owned() });
+        self.enqueue(Job::ComputeMetrics { match_id: match_id.to_owned() }).await?;
         Ok(())
+    }
+
+    async fn compute_metrics(&self, match_id: &str) -> JobResult {
+        let id = match_id.to_owned();
+        let loaded = self
+            .db
+            .call(move |c| {
+                let raw = matches::get_raw(c, &id, RawKind::Match)?;
+                let timeline = matches::get_raw(c, &id, RawKind::Timeline)?;
+                Ok(raw.map(|r| (r, timeline)))
+            })
+            .await?;
+        let Some((raw, timeline_raw)) = loaded else {
+            return Err(JobError::Permanent(format!("match {match_id} is not stored")));
+        };
+        let game = rc_metrics::parse_match(&raw).map_err(|e| JobError::Permanent(e.to_string()))?;
+        let timeline = timeline_raw
+            .map(|t| rc_metrics::parse_timeline(&t))
+            .transpose()
+            .map_err(|e| JobError::Permanent(e.to_string()))?;
+        let patch = self
+            .db
+            .call({
+                let id = match_id.to_owned();
+                move |c| matches::patch_of_match(c, &id)
+            })
+            .await?
+            .unwrap_or_default();
+        // Item prices only feed first-back gold and first-item timing. With
+        // Data Dragon unreachable, store the rest under version 0 so the next
+        // start recomputes the match in full.
+        let (items, version) = match self.item_catalog(&patch).await {
+            Ok(items) => (items, rc_metrics::METRICS_VERSION),
+            Err(e) => {
+                tracing::warn!(match_id, error = %e, "no item data; computing metrics without item timings");
+                (Arc::new(rc_metrics::ItemCatalog::default()), 0)
+            }
+        };
+        let metrics = rc_metrics::compute(&game, timeline.as_ref(), &items);
+        let id = match_id.to_owned();
+        self.db.call(move |c| rc_store::metrics::save_match_metrics(c, &id, version, &metrics.by_participant)).await?;
+        self.emit(EngineEvent::MetricsComputed { match_id: match_id.to_owned() });
+        if timeline.is_some() {
+            self.maybe_queue_auto_review(match_id).await?;
+        }
+        Ok(())
+    }
+
+    /// Queues an automatic review for a fresh game of the active account if
+    /// the setting is on. Never for backfilled history.
+    async fn maybe_queue_auto_review(&self, match_id: &str) -> JobResult {
+        let id = match_id.to_owned();
+        let target = self
+            .db
+            .call(move |c| {
+                let s = rc_store::settings::app(c)?;
+                if !s.ai.auto_post_game {
+                    return Ok(None);
+                }
+                let account = match s.active_account_id {
+                    Some(a) => accounts::get_account(c, a)?,
+                    None => accounts::primary_account(c)?,
+                };
+                let Some(account) = account else { return Ok(None) };
+                let Some((summary, _)) = matches::account_match(c, account.id, &id)? else { return Ok(None) };
+                let ended = summary.game_start_ms + summary.duration_s * 1000;
+                let fresh = rc_common::time::now_ms() - ended < AUTO_REVIEW_MAX_AGE_MS;
+                let eligible = fresh
+                    && !summary.is_remake
+                    && rc_common::queues::is_standard_rift(summary.queue_id, summary.map_id)
+                    && !rc_store::reports::has_report(c, rc_coach::detail::POST_GAME, account.id, &id)?;
+                Ok(eligible.then_some(account.id))
+            })
+            .await?;
+        if let Some(account_id) = target {
+            self.enqueue(Job::AiReview { account_id, match_id: match_id.to_owned() }).await?;
+        }
+        Ok(())
+    }
+
+    async fn ai_review(&self, account_id: i64, match_id: &str) -> JobResult {
+        let settings = self.db.call(|c| rc_store::settings::app(c)).await?;
+        let client =
+            rc_coach::provider::client_from_settings(&settings.ai).map_err(|e| JobError::Permanent(e.to_string()))?;
+        let id = match_id.to_owned();
+        let patch = self.db.call(move |c| matches::patch_of_match(c, &id)).await?.unwrap_or_default();
+        let items = self.item_catalog(&patch).await.ok();
+        let opts = rc_coach::review::ReviewOptions {
+            baseline_games: settings.baseline_games,
+            max_tokens: settings.ai.max_tokens,
+            force: false,
+        };
+        match rc_coach::review::post_game_review(&self.db, &client, account_id, match_id, &opts, items).await {
+            Ok(report) => {
+                self.emit(EngineEvent::ReviewReady { match_id: match_id.to_owned(), report_id: report.id });
+                Ok(())
+            }
+            Err(rc_coach::CoachError::Ai(e)) if e.is_transient() => Err(JobError::Retry(e.to_string())),
+            Err(e) => Err(JobError::Permanent(e.to_string())),
+        }
     }
 
     async fn ddragon_sync(&self, patch: &str) -> JobResult {

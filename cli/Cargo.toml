@@ -8,6 +8,8 @@ publish.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
+rc-coach = { version = "0.1.0", path = "../crates/coach" }
+rc-metrics = { version = "0.1.0", path = "../crates/metrics" }
 rc-common = { version = "0.1.0", path = "../crates/common" }
 rc-ddragon = { version = "0.1.0", path = "../crates/ddragon" }
 rc-jobs = { version = "0.1.0", path = "../crates/jobs" }

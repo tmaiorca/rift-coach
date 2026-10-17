@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 dirs = "7.0.0"
+keyring-core = "1.0.1"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.21"
 tracing = "0.1.44"
@@ -16,6 +17,7 @@ tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56.0"
+windows-native-keyring-store = "1.1.0"
 
 [lints]
 workspace = true

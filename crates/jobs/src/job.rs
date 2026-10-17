@@ -25,6 +25,16 @@ pub enum Job {
     DdragonSync {
         patch: String,
     },
+    /// (Re)compute metrics for all ten participants from stored raw data.
+    ComputeMetrics {
+        match_id: String,
+    },
+    /// Automatic post-game AI review (only queued for fresh games when the
+    /// setting is on; on-demand reviews run directly from the UI).
+    AiReview {
+        account_id: i64,
+        match_id: String,
+    },
 }
 
 impl Job {
@@ -35,6 +45,8 @@ impl Job {
             Self::FetchMatch { .. } => "fetch_match",
             Self::FetchTimeline { .. } => "fetch_timeline",
             Self::DdragonSync { .. } => "ddragon_sync",
+            Self::ComputeMetrics { .. } => "compute_metrics",
+            Self::AiReview { .. } => "ai_review",
         }
     }
 
@@ -46,6 +58,8 @@ impl Job {
             Self::FetchMatch { match_id } => format!("match:{match_id}"),
             Self::FetchTimeline { match_id } => format!("timeline:{match_id}"),
             Self::DdragonSync { patch } => format!("ddragon:{patch}"),
+            Self::ComputeMetrics { match_id } => format!("metrics:{match_id}"),
+            Self::AiReview { account_id, match_id } => format!("review:{account_id}:{match_id}"),
         }
     }
 
@@ -56,8 +70,11 @@ impl Job {
             Self::ResolveAccount { .. } => 100,
             Self::SyncMatchList { .. } => 90,
             Self::DdragonSync { .. } => 80,
+            // Local and cheap: keeps the UI's numbers current while fetching.
+            Self::ComputeMetrics { .. } => 70,
             Self::FetchMatch { .. } => 50,
             Self::FetchTimeline { .. } => 40,
+            Self::AiReview { .. } => 20,
         }
     }
 
@@ -65,6 +82,7 @@ impl Job {
         match self {
             // A just-finished match can take several minutes to appear.
             Self::FetchMatch { .. } | Self::FetchTimeline { .. } => 8,
+            Self::AiReview { .. } => 3,
             _ => 5,
         }
     }
@@ -77,11 +95,19 @@ impl Job {
             Self::FetchMatch { match_id } => format!("match {match_id}"),
             Self::FetchTimeline { match_id } => format!("timeline {match_id}"),
             Self::DdragonSync { patch } => format!("Data Dragon {patch}"),
+            Self::ComputeMetrics { match_id } => format!("metrics {match_id}"),
+            Self::AiReview { match_id, .. } => format!("AI review {match_id}"),
         }
     }
 
     pub fn uses_riot_api(&self) -> bool {
-        !matches!(self, Self::DdragonSync { .. })
+        matches!(
+            self,
+            Self::ResolveAccount { .. }
+                | Self::SyncMatchList { .. }
+                | Self::FetchMatch { .. }
+                | Self::FetchTimeline { .. }
+        )
     }
 }
 

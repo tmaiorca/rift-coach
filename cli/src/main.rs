@@ -42,6 +42,17 @@ enum Command {
     },
     /// Games and win rate per role and champion (standard Summoner's Rift only).
     Summary,
+    /// Compute any missing metrics, then print one game's metrics with
+    /// percentiles (default: the newest Summoner's Rift game).
+    Analyze {
+        match_id: Option<String>,
+        /// Personal baseline window (games).
+        #[arg(long, default_value_t = 30)]
+        games: u32,
+        /// Print the AI facts object instead of the table.
+        #[arg(long)]
+        facts: bool,
+    },
     /// Save raw API responses to a gitignored folder for building fixtures.
     RecordFixtures {
         riot_id: RiotId,
@@ -91,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
                 Command::Ingest { riot_id, platform, count } => ingest(&engine, &riot_id, platform, count).await,
                 Command::Status => status(&engine, &paths).await,
                 Command::Smoke { riot_id, platform } => smoke(&engine, &riot_id, platform).await,
+                Command::Analyze { match_id, games, facts } => analyze(&engine, match_id, games, facts).await,
                 Command::RecordFixtures { riot_id, platform, matches, out } => {
                     fixtures::record(engine.riot(), &riot_id, platform, matches, &out).await
                 }
@@ -106,6 +118,7 @@ fn load_key() -> Option<rc_common::Secret> {
             let from = match source {
                 KeySource::ProcessEnv => "process environment",
                 KeySource::UserEnv => "user environment (registry)",
+                KeySource::CredentialManager => "Windows Credential Manager",
             };
             println!("Riot API key: found in {from}");
             Some(key)
@@ -115,6 +128,65 @@ fn load_key() -> Option<rc_common::Secret> {
             None
         }
     }
+}
+
+async fn analyze(engine: &Arc<Engine>, match_id: Option<String>, games: u32, facts: bool) -> anyhow::Result<()> {
+    engine.start().await?;
+    if let IdleOutcome::KeyProblem(k) = engine.wait_idle().await? {
+        println!("(work paused: key {k:?}; analyzing what's stored)");
+    }
+    let detail = engine
+        .db()
+        .call(move |c| {
+            let account = rc_store::accounts::primary_account(c)?
+                .ok_or_else(|| rc_store::StoreError::Io(std::io::Error::other("no account tracked yet")))?;
+            let id = match match_id {
+                Some(id) => id,
+                None => rc_store::metrics::recent_game_metrics(c, account.id, 1)?
+                    .first()
+                    .map(|g| g.match_id.clone())
+                    .ok_or_else(|| rc_store::StoreError::Io(std::io::Error::other("no Rift games stored")))?,
+            };
+            Ok((account.id, rc_coach::detail::match_detail(c, account.id, &id, games)))
+        })
+        .await?;
+    let (account_id, detail) = (detail.0, detail.1?);
+    if facts {
+        let items = engine.item_catalog(&detail.summary.patch).await.ok();
+        let f =
+            rc_coach::review::post_game_facts(engine.db(), account_id, &detail.summary.match_id, games, items).await?;
+        let text = serde_json::to_string_pretty(&f)?;
+        println!("{text}");
+        eprintln!("{} chars (~{} tokens)", text.len(), text.len() / 4);
+        return Ok(());
+    }
+    let s = &detail.summary;
+    println!(
+        "{} {} {} {}/{}/{} ({})",
+        s.match_id,
+        s.champion_name,
+        s.team_position.as_deref().unwrap_or("-"),
+        s.kills,
+        s.deaths,
+        s.assists,
+        if s.win { "win" } else { "loss" }
+    );
+    let p = &detail.comparison.populations;
+    println!("{:<28} {:>9}  {:>22}  {:>22}", "metric", "value", p.role_label, "your games");
+    let fmt = |c: &Option<rc_metrics::percentile::Comparison>| {
+        c.as_ref().map_or("-".to_string(), |c| format!("{:>3.0}% (med {:.1}, n={})", c.better_than_pct, c.median, c.n))
+    };
+    for m in &detail.comparison.metrics {
+        println!("{:<28} {:>9.2}  {:>22}  {:>22}", m.label, m.value, fmt(&m.vs_role), fmt(&m.vs_personal));
+    }
+    println!("deaths: {}", detail.deaths.len());
+    for d in &detail.deaths {
+        println!(
+            "  {:>5.0}s enemies={} pre14={} enemy_half={} gold_vs_opp={:?}",
+            d.t_s, d.enemies_involved, d.before_14, d.in_enemy_half, d.gold_vs_opponent
+        );
+    }
+    Ok(())
 }
 
 async fn ingest(engine: &Arc<Engine>, riot_id: &RiotId, platform: Platform, count: u32) -> anyhow::Result<()> {

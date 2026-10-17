@@ -4,10 +4,13 @@
 //! [`Db::with`] from sync code.
 
 pub mod accounts;
+pub mod activity;
 pub mod ddragon;
 pub mod jobs;
 pub mod matches;
+pub mod metrics;
 pub mod raw;
+pub mod reports;
 pub mod settings;
 
 use std::path::Path;
@@ -35,7 +38,10 @@ pub enum StoreError {
 pub type Result<T> = std::result::Result<T, StoreError>;
 
 fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(include_str!("../migrations/001_init.sql"))])
+    Migrations::new(vec![
+        M::up(include_str!("../migrations/001_init.sql")),
+        M::up(include_str!("../migrations/002_metrics_ai_activity.sql")),
+    ])
 }
 
 #[derive(Clone, Debug)]

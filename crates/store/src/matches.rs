@@ -225,6 +225,30 @@ pub struct MatchSummary {
     pub champ_level: i32,
 }
 
+fn summary_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<MatchSummary> {
+    Ok(MatchSummary {
+        match_id: r.get(0)?,
+        queue_id: r.get(1)?,
+        map_id: r.get(2)?,
+        patch: r.get(3)?,
+        game_start_ms: r.get(4)?,
+        duration_s: r.get(5)?,
+        is_remake: r.get(6)?,
+        has_timeline: r.get(7)?,
+        champion_id: r.get(8)?,
+        champion_name: r.get(9)?,
+        team_position: r.get(10)?,
+        win: r.get(11)?,
+        kills: r.get(12)?,
+        deaths: r.get(13)?,
+        assists: r.get(14)?,
+        cs: r.get(15)?,
+        gold_earned: r.get(16)?,
+        vision_score: r.get(17)?,
+        champ_level: r.get(18)?,
+    })
+}
+
 pub fn list_account_matches(conn: &Connection, account_id: i64, limit: u32, offset: u32) -> Result<Vec<MatchSummary>> {
     let mut stmt = conn.prepare(
         "SELECT m.match_id, m.queue_id, m.map_id, m.patch, m.game_start_ms, m.duration_s, m.is_remake, m.has_timeline,
@@ -237,32 +261,25 @@ pub fn list_account_matches(conn: &Connection, account_id: i64, limit: u32, offs
           ORDER BY m.game_start_ms DESC
           LIMIT ?2 OFFSET ?3",
     )?;
-    let rows = stmt
-        .query_map(params![account_id, limit, offset], |r| {
-            Ok(MatchSummary {
-                match_id: r.get(0)?,
-                queue_id: r.get(1)?,
-                map_id: r.get(2)?,
-                patch: r.get(3)?,
-                game_start_ms: r.get(4)?,
-                duration_s: r.get(5)?,
-                is_remake: r.get(6)?,
-                has_timeline: r.get(7)?,
-                champion_id: r.get(8)?,
-                champion_name: r.get(9)?,
-                team_position: r.get(10)?,
-                win: r.get(11)?,
-                kills: r.get(12)?,
-                deaths: r.get(13)?,
-                assists: r.get(14)?,
-                cs: r.get(15)?,
-                gold_earned: r.get(16)?,
-                vision_score: r.get(17)?,
-                champ_level: r.get(18)?,
-            })
-        })?
-        .collect::<rusqlite::Result<_>>()?;
+    let rows = stmt.query_map(params![account_id, limit, offset], summary_row)?.collect::<rusqlite::Result<_>>()?;
     Ok(rows)
+}
+
+/// The account's row for one match.
+pub fn account_match(conn: &Connection, account_id: i64, match_id: &str) -> Result<Option<(MatchSummary, i32)>> {
+    Ok(conn
+        .query_row(
+            "SELECT m.match_id, m.queue_id, m.map_id, m.patch, m.game_start_ms, m.duration_s, m.is_remake,
+                    m.has_timeline, p.champion_id, p.champion_name, p.team_position, p.win, p.kills, p.deaths,
+                    p.assists, p.cs, p.gold_earned, p.vision_score, p.champ_level, am.participant_id
+               FROM account_matches am
+               JOIN matches m ON m.match_id = am.match_id
+               JOIN match_participants p ON p.match_id = am.match_id AND p.participant_id = am.participant_id
+              WHERE am.account_id = ?1 AND am.match_id = ?2",
+            params![account_id, match_id],
+            |r| Ok((summary_row(r)?, r.get(19)?)),
+        )
+        .optional()?)
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

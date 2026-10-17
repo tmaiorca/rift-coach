@@ -263,6 +263,77 @@ async fn ingests_recorded_fixtures() {
     // Only the Data Dragon job (mock is down) failed.
     let failures = engine.status().await.expect("status").recent_failures;
     assert!(failures.iter().all(|f| f.kind == "ddragon_sync"), "{failures:?}");
+
+    // Metrics were still computed for all ten players of every match, but
+    // stored as partial (version 0) so a later start completes them.
+    let (stale, mine) = db
+        .with(|c| {
+            let (_, pid) = rc_store::matches::account_match(c, me, &ids[0])?.expect("row");
+            Ok((
+                rc_store::metrics::stale_matches(c, rc_metrics::METRICS_VERSION)?,
+                rc_store::metrics::participant_metrics(c, &ids[0], pid)?,
+            ))
+        })
+        .expect("q");
+    assert_eq!(stale.len(), ids.len());
+    assert!(mine.contains_key("cs_10") && mine.contains_key("kp"));
+    assert!(!mine.contains_key("first_back_gold"), "needs item prices");
+
+    // On-demand AI review against a mock provider: the first reply is
+    // unusable, so the coach asks again with feedback.
+    let ai = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "content": [{"type": "text", "text": "Sorry, here is some prose instead of JSON."}],
+            "usage": {"input_tokens": 1000, "output_tokens": 10}
+        })))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&ai)
+        .await;
+    let good = json!({
+        "summary": "You traded evenly early but fell behind after repeated laning deaths.",
+        "went_well": [{"title": "Fight presence", "detail": "You joined most of your team's kills.", "evidence": ["kp"]}],
+        "improve": [{"title": "Early deaths", "detail": "Deaths before 14:00 cost lane control.", "evidence": ["deaths_pre14", "death_1"]}],
+        "priority_fixes": [{"title": "Respect jungle timers", "why": "Early deaths gave tempo away.", "how": "Ward river before pushing.", "evidence": ["deaths_pre14"]}],
+        "next_game_focus": {"goal": "At most 1 death before 14:00", "metric": "deaths_pre14"},
+        "confidence": "medium",
+        "confidence_reason": "One game of data."
+    });
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "content": [{"type": "text", "text": good.to_string()}],
+            "usage": {"input_tokens": 1100, "output_tokens": 300}
+        })))
+        .with_priority(2)
+        .mount(&ai)
+        .await;
+    let client = rc_ai::AiClient::new(
+        rc_ai::ProviderConfig { kind: rc_ai::ProviderKind::Anthropic, model: "m".into(), base_url: Some(ai.uri()) },
+        Some(Secret::new("sk-test")),
+    )
+    .expect("ai");
+    // The newest game has deaths; pick one with at least one.
+    let target = ids
+        .iter()
+        .find(|id| db.with(|c| Ok(rc_store::matches::account_match(c, me, id)?.expect("row").0.deaths > 0)).expect("q"))
+        .expect("a game with deaths");
+    let opts = rc_coach::review::ReviewOptions { baseline_games: 30, max_tokens: 2000, force: false };
+    let report = rc_coach::review::post_game_review(&db, &client, me, target, &opts, None).await.expect("review");
+    assert_eq!(report.validation, "ok", "{:?}", report.notes);
+    assert_eq!(report.output_tokens, Some(310));
+    let requests = ai.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 2);
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(body.contains("deaths_pre14") && body.contains("vs_role"), "facts sent");
+    assert!(!body.contains("FIXTURE-PUUID") && !body.contains("Player0"), "no other players' identities");
+
+    // Cached: asking again doesn't call the provider.
+    let again = rc_coach::review::post_game_review(&db, &client, me, target, &opts, None).await.expect("cached");
+    assert_eq!(again.id, report.id);
+    assert_eq!(ai.received_requests().await.unwrap_or_default().len(), 2);
 }
 
 #[tokio::test]

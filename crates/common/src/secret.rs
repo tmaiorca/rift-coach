@@ -36,15 +36,21 @@ impl fmt::Display for Secret {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeySource {
+    CredentialManager,
     ProcessEnv,
     UserEnv,
 }
 
-/// Looks up the Riot API key: process environment first, then (on Windows) the
+/// Looks up the Riot API key: a key saved in the app (Windows Credential
+/// Manager) wins, then the process environment, then (on Windows) the
 /// user-scope environment in the registry, so a key set after this process's
-/// parent shell started is still found. Credential Manager storage arrives with
-/// the first-run wizard.
+/// parent shell started is still found.
 pub fn load_riot_api_key() -> Option<(Secret, KeySource)> {
+    match crate::credentials::load_secret(crate::credentials::RIOT_API_KEY) {
+        Ok(Some(key)) => return Some((key, KeySource::CredentialManager)),
+        Ok(None) => {}
+        Err(e) => tracing::warn!(error = %e, "could not read Credential Manager; falling back to environment"),
+    }
     if let Some(key) = std::env::var(RIOT_KEY_ENV).ok().and_then(non_empty) {
         return Some((Secret::new(key), KeySource::ProcessEnv));
     }
