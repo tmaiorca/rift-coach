@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use crate::model::{Event, Frame, ItemCatalog, Match, MatchInfo, Participant, Timeline};
 
 /// Bump to recompute every stored match (e.g. after fixing a metric).
-pub const METRICS_VERSION: i64 = 2;
+pub const METRICS_VERSION: i64 = 4;
 
 const MIN: i64 = 60_000;
 /// Purchases before this are the starting items, not a back.
@@ -144,6 +144,13 @@ pub fn compute(m: &Match, tl: Option<&Timeline>, items: &ItemCatalog) -> MatchMe
             }
             put("first_item_min", ts.first_item_ms.get(&pid).map(|t| *t as f64 / MIN as f64));
             put("max_team_lead", ts.max_team_lead.get(&p.team_id).map(|v| f64::from(*v)));
+
+            let deaths = crate::detail::deaths_of(m, tl, p);
+            let count =
+                |f: fn(&crate::detail::DeathContext) -> bool| Some(deaths.iter().filter(|d| f(d)).count() as f64);
+            put("deaths_ahead", count(|d| d.while_ahead()));
+            put("deaths_before_obj", count(|d| d.enemy_objective.is_some()));
+            put("deaths_enemy_side", count(|d| d.in_enemy_half));
         }
         by_participant.insert(p.participant_id, out);
     }
@@ -177,7 +184,7 @@ fn is_champion(id: Option<i32>) -> Option<i32> {
     id.filter(|i| (1..=10).contains(i))
 }
 
-const OBJECTIVE_MONSTERS: [&str; 5] = ["DRAGON", "HORDE", "RIFTHERALD", "BARON_NASHOR", "ATAKHAN"];
+pub const OBJECTIVE_MONSTERS: [&str; 5] = ["DRAGON", "HORDE", "RIFTHERALD", "BARON_NASHOR", "ATAKHAN"];
 
 impl TimelineStats {
     fn collect(info: &MatchInfo, tl: &Timeline, items: &ItemCatalog) -> Self {

@@ -2,20 +2,30 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { DeathMap } from "../components/DeathMap";
 import { LineChart, type ChartSeries } from "../components/LineChart";
+import { ReviewBody } from "../components/ReviewBody";
 import { ChampionIcon, ItemIcon, SpellIcon, useChampionName } from "../lib/assets";
-import { clock, dateTime, formatMetric, pctTone, roleLabel, signed } from "../lib/format";
-import type { Comparison, MatchDetail as Detail, MetricGroup, MetricView, Report, ScoreRow } from "../types";
+import { clock, dateTime, formatMetric, pctTone, roleLabel, signed, ZONE_LABEL } from "../lib/format";
+import type {
+  Comparison,
+  MatchDetail as Detail,
+  GoalInput,
+  MetricGroup,
+  MetricView,
+  Report,
+  ScoreRow,
+} from "../types";
 
 interface Props {
   matchId: string;
   onBack: () => void;
   onLookup: (riotId: string) => void;
   onOpenSettings: () => void;
+  onTrackFocus: (draft: GoalInput) => void;
   /** Bumped by the shell when new data for this match may exist. */
   refreshKey: number;
 }
 
-export function MatchDetail({ matchId, onBack, onLookup, onOpenSettings, refreshKey }: Props) {
+export function MatchDetail({ matchId, onBack, onLookup, onOpenSettings, onTrackFocus, refreshKey }: Props) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,7 +58,9 @@ export function MatchDetail({ matchId, onBack, onLookup, onOpenSettings, refresh
         d={detail}
         onOpenSettings={onOpenSettings}
         onReport={(r) => setDetail({ ...detail, report: r })}
+        onTrackFocus={onTrackFocus}
       />
+      {detail.patterns.length > 0 && <PatternsPanel d={detail} />}
       {!detail.is_standard_rift && (
         <div className="banner warn">
           {detail.summary.is_remake ? "Remake" : detail.queue_name}: shown for reference, excluded from
@@ -108,16 +120,29 @@ function ReviewPanel({
   d,
   onOpenSettings,
   onReport,
+  onTrackFocus,
 }: {
   d: Detail;
   onOpenSettings: () => void;
   onReport: (r: Report) => void;
+  onTrackFocus: (draft: GoalInput) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [facts, setFacts] = useState<string | null>(null);
   const r = d.report;
-  const metricLabel = useMemo(() => new Map(d.comparison.metrics.map((m) => [m.key, m.label])), [d]);
+  const labels = useMemo(() => {
+    const m = new Map<string, string>(d.comparison.metrics.map((x) => [x.key, x.label]));
+    d.patterns.forEach((p) => m.set(`pattern:${p.kind}`, p.title));
+    return m;
+  }, [d]);
+  const labelOf = (id: string) =>
+    labels.get(id) ??
+    (id.startsWith("death_")
+      ? id.replace("death_", "death #")
+      : id.startsWith("goal_")
+        ? "your goal"
+        : id.replace("pattern:", ""));
 
   const run = async (force: boolean) => {
     setBusy(true);
@@ -138,17 +163,6 @@ function ReviewPanel({
       setError(String(e));
     }
   };
-
-  const evidence = (ids: string[]) =>
-    ids.length > 0 && (
-      <div className="evidence">
-        {ids.map((id) => (
-          <span key={id} className="tag">
-            {metricLabel.get(id) ?? id.replace("death_", "death #")}
-          </span>
-        ))}
-      </div>
-    );
 
   return (
     <section className="panel review">
@@ -187,59 +201,50 @@ function ReviewPanel({
           against them.
         </p>
       )}
-      {r && (
-        <div className="review-body">
-          {r.validation !== "ok" && (
-            <div className="banner warn">
-              Some numbers couldn't be traced to the game data. Treat them with care. {r.notes}
+      {r && <ReviewBody report={r} labelOf={labelOf} onTrackFocus={onTrackFocus} />}
+    </section>
+  );
+}
+
+// ---------- patterns in this game ----------
+
+function PatternsPanel({ d }: { d: Detail }) {
+  return (
+    <section className="panel">
+      <h2>Patterns in this game</h2>
+      <div className="match-patterns">
+        {d.patterns.map((p) => (
+          <div key={p.kind} className={`signal ${p.polarity === "weakness" ? "weak" : "strong"}`}>
+            <div className="signal-head">
+              <b>{p.title}</b>
+              <span className="spacer" />
+              {p.recurring ? (
+                <span className={`tag ${p.polarity === "weakness" ? "warn" : "ok"}`}>
+                  habit: {p.recurring.games_affected} of your last {p.recurring.games_considered} games
+                </span>
+              ) : (
+                <span className="tag">one-off</span>
+              )}
             </div>
-          )}
-          <p className="summary">{r.output.summary}</p>
-          <div className="review-cols">
-            <div>
-              <h3 className="good">What went well</h3>
-              {r.output.went_well.map((it, i) => (
-                <div key={i} className="review-item">
-                  <b>{it.title}</b>
-                  <p>{it.detail}</p>
-                  {evidence(it.evidence)}
-                </div>
-              ))}
-            </div>
-            <div>
-              <h3 className="bad">What to improve</h3>
-              {r.output.improve.map((it, i) => (
-                <div key={i} className="review-item">
-                  <b>{it.title}</b>
-                  <p>{it.detail}</p>
-                  {evidence(it.evidence)}
-                </div>
-              ))}
-            </div>
+            <p className="muted small-text">
+              {p.what}.
+              {p.recurring?.win_rate_affected != null &&
+                p.recurring.win_rate_other != null &&
+                ` You win ${p.recurring.win_rate_affected}% of games where this happens, ${p.recurring.win_rate_other}% otherwise.`}
+            </p>
+            {p.evidence.length > 0 && (
+              <ul className="evidence-list">
+                {p.evidence.map((e, i) => (
+                  <li key={i}>
+                    {e.t_s !== null && <span className="mono">{clock(e.t_s)} </span>}
+                    {e.note}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-          <h3>Priority fixes</h3>
-          <ol className="fixes">
-            {r.output.priority_fixes.map((f, i) => (
-              <li key={i}>
-                <b>{f.title}</b>
-                <p>{f.why}</p>
-                <p className="how">
-                  <span className="muted">Try:</span> {f.how}
-                </p>
-                {evidence(f.evidence)}
-              </li>
-            ))}
-          </ol>
-          <div className="focus">
-            <span className="muted">Next-game focus</span>
-            <b>{r.output.next_game_focus.goal}</b>
-          </div>
-          <p className="muted small-text">
-            Confidence: {r.output.confidence}
-            {r.output.confidence_reason ? ` (${r.output.confidence_reason})` : ""}
-          </p>
-        </div>
-      )}
+        ))}
+      </div>
     </section>
   );
 }
@@ -476,7 +481,8 @@ function MapPanel({ d }: { d: Detail }) {
                 {x.killer_id && x.killer_id > 0 ? champ(x.killer_id) : "Tower/minions"}
                 {x.enemies_involved > 1 && <span className="tag">{x.enemies_involved} enemies</span>}
                 {x.before_14 && <span className="tag warn">laning phase</span>}
-                {x.in_enemy_half && <span className="tag">enemy side ≈</span>}
+                <span className="tag">{ZONE_LABEL[x.zone]} ≈</span>
+                {x.enemy_objective && <span className="tag warn">enemy took {x.enemy_objective}</span>}
               </span>
               <span className="muted small-text">
                 {x.gold_vs_opponent !== null && `${signed(x.gold_vs_opponent)}g vs opp · `}

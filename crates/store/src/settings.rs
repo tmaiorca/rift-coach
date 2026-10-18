@@ -43,6 +43,8 @@ pub struct AppSettings {
     pub show_other_queues: bool,
     /// Account the UI is showing; `None` means the primary account.
     pub active_account_id: Option<i64>,
+    /// Games less than this many minutes apart belong to one play session.
+    pub session_gap_min: u32,
     pub ai: AiSettings,
     pub appearance: AppearanceSettings,
 }
@@ -54,6 +56,7 @@ impl Default for AppSettings {
             baseline_games: 30,
             show_other_queues: true,
             active_account_id: None,
+            session_gap_min: 60,
             ai: AiSettings::default(),
             appearance: AppearanceSettings::default(),
         }
@@ -70,7 +73,12 @@ pub struct AiSettings {
     /// Review each new game automatically once its timeline arrives
     /// (only games that ended in the last few hours, never a backfill).
     pub auto_post_game: bool,
+    /// Review a play session automatically once it has ended.
+    pub auto_session: bool,
     pub max_tokens: u32,
+    /// Stop generating reports once this many tokens were used in the last
+    /// 30 days. `None` = no cap.
+    pub monthly_token_limit: Option<u64>,
 }
 
 impl Default for AiSettings {
@@ -80,7 +88,9 @@ impl Default for AiSettings {
             model: "claude-sonnet-5-5".into(),
             base_url: None,
             auto_post_game: false,
+            auto_session: false,
             max_tokens: 4000,
+            monthly_token_limit: None,
         }
     }
 }
@@ -120,6 +130,8 @@ mod tests {
             assert_eq!(s.ingest_count, 100);
             assert_eq!(s.ai.provider, "gemini");
             assert_eq!(s.ai.max_tokens, 4000);
+            assert_eq!(s.session_gap_min, 60);
+            assert_eq!(s.ai.monthly_token_limit, None);
             Ok(())
         })
         .expect("ok");

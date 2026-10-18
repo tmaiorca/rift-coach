@@ -50,16 +50,7 @@ pub struct MetricComparison {
     pub metrics: Vec<MetricView>,
 }
 
-pub fn role_label(role: &str) -> &'static str {
-    match role {
-        "TOP" => "top laners",
-        "JUNGLE" => "junglers",
-        "MIDDLE" => "mid laners",
-        "BOTTOM" => "ADCs",
-        "UTILITY" => "supports",
-        _ => "players",
-    }
-}
+pub use rc_metrics::defs::role_label;
 
 /// `role` is the player's `teamPosition` (None in non-Rift modes, where only
 /// the raw values are returned).

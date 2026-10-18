@@ -1,5 +1,6 @@
 import { useContext, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { GoalCard } from "../components/Goals";
 import { LineChart } from "../components/LineChart";
 import { ChampionIcon, ChampionsContext, useChampionName } from "../lib/assets";
 import { ago, formatMetric, roleLabel } from "../lib/format";
@@ -8,7 +9,9 @@ import type {
   BucketSnapshot,
   ChampionEntry,
   DashboardView,
+  Goal,
   MetricDef,
+  Signal,
   StatusView,
 } from "../types";
 
@@ -19,6 +22,8 @@ interface Props {
   ingestCount: number;
   onOpenMatch: (id: string) => void;
   onGoPlayers: () => void;
+  onGoPatterns: () => void;
+  onGoGoals: () => void;
   onSync: () => Promise<void>;
 }
 
@@ -31,9 +36,13 @@ export function Dashboard({
   ingestCount,
   onOpenMatch,
   onGoPlayers,
+  onGoPatterns,
+  onGoGoals,
   onSync,
 }: Props) {
   const [view, setView] = useState<DashboardView | null>(null);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [signals, setSignals] = useState<Signal[]>([]);
   const [defs, setDefs] = useState<MetricDef[]>([]);
   const [trend, setTrend] = useState("cs_10");
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +51,11 @@ export function Dashboard({
 
   useEffect(() => {
     api.dashboard().then(setView, (e) => setError(String(e)));
+    api.listGoals(false).then(setGoals, () => {});
+    api.patterns().then(
+      (p) => setSignals(p.signals.filter((s) => s.polarity === "weakness").slice(0, 3)),
+      () => setSignals([]),
+    );
   }, [refreshKey, status?.account?.id]);
   useEffect(() => {
     api.metricDefinitions().then(setDefs, () => {});
@@ -106,6 +120,51 @@ export function Dashboard({
           />
         </div>
       </section>
+
+      <div className="grid-2 even">
+        <section className="panel">
+          <div className="panel-head">
+            <h2 className="bad">Fix these first</h2>
+            <div className="spacer" />
+            <button className="secondary small" onClick={onGoPatterns}>
+              All patterns
+            </button>
+          </div>
+          {signals.length === 0 && (
+            <p className="muted">No recurring problems found in your look-back window.</p>
+          )}
+          {signals.map((s) => (
+            <div key={s.id} className={`signal weak sev-${s.severity}`}>
+              <div className="signal-head">
+                <span className="sev-dot" />
+                <b>{s.title}</b>
+                <span className="spacer" />
+                <span className="tag">
+                  {s.games_affected}/{s.games_considered} games
+                </span>
+              </div>
+              <p className="small-text">{s.detail}</p>
+            </div>
+          ))}
+        </section>
+        <section className="panel">
+          <div className="panel-head">
+            <h2>Focus goals</h2>
+            <div className="spacer" />
+            <button className="secondary small" onClick={onGoGoals}>
+              {goals.length ? "Manage" : "Set a goal"}
+            </button>
+          </div>
+          {goals.length === 0 && (
+            <p className="muted">
+              Pick one habit to work on (e.g. "at most 1 death before 14:00") and track it game by game.
+            </p>
+          )}
+          {goals.map((g) => (
+            <GoalCard key={g.id} goal={g} compact onOpenMatch={onOpenMatch} />
+          ))}
+        </section>
+      </div>
 
       <div className="cards">
         {CARDS.map((k) => {

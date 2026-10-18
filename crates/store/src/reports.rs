@@ -12,6 +12,8 @@ pub struct NewReport<'a> {
     pub kind: &'a str,
     pub account_id: i64,
     pub match_id: Option<&'a str>,
+    /// For reports covering several games, e.g. `session:NA1_123:4`.
+    pub scope: Option<&'a str>,
     pub provider: &'a str,
     pub model: &'a str,
     pub prompt_version: &'a str,
@@ -29,6 +31,7 @@ pub struct Report {
     pub kind: String,
     pub account_id: i64,
     pub match_id: Option<String>,
+    pub scope: Option<String>,
     pub provider: String,
     pub model: String,
     pub prompt_version: String,
@@ -41,7 +44,7 @@ pub struct Report {
 }
 
 const COLS: &str = "id, kind, account_id, match_id, provider, model, prompt_version, output_json, validation, notes,
-                    input_tokens, output_tokens, created_at";
+                    input_tokens, output_tokens, created_at, scope";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Report> {
     let output: String = r.get(7)?;
@@ -59,14 +62,15 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Report> {
         input_tokens: r.get(10)?,
         output_tokens: r.get(11)?,
         created_at: r.get(12)?,
+        scope: r.get(13)?,
     })
 }
 
 pub fn insert(conn: &Connection, r: &NewReport<'_>) -> Result<i64> {
     conn.execute(
         "INSERT INTO ai_reports (kind, account_id, match_id, provider, model, prompt_version, input_json, output_json,
-                                 validation, notes, input_tokens, output_tokens, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                                 validation, notes, input_tokens, output_tokens, created_at, scope)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             r.kind,
             r.account_id,
@@ -80,7 +84,8 @@ pub fn insert(conn: &Connection, r: &NewReport<'_>) -> Result<i64> {
             r.notes,
             r.input_tokens,
             r.output_tokens,
-            now_ms()
+            now_ms(),
+            r.scope
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -98,6 +103,31 @@ pub fn latest_for_match(conn: &Connection, kind: &str, account_id: i64, match_id
             row,
         )
         .optional()?)
+}
+
+/// Newest report of `kind` for a multi-game scope (e.g. a session).
+pub fn latest_for_scope(conn: &Connection, kind: &str, account_id: i64, scope: &str) -> Result<Option<Report>> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT {COLS} FROM ai_reports WHERE kind = ?1 AND account_id = ?2 AND scope = ?3
+                 ORDER BY created_at DESC, id DESC LIMIT 1"
+            ),
+            params![kind, account_id, scope],
+            row,
+        )
+        .optional()?)
+}
+
+/// Reports generated since `since_ms` (all accounts) and their total tokens,
+/// for the monthly usage cap.
+pub fn usage_since(conn: &Connection, since_ms: i64) -> Result<(i64, i64)> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0)
+           FROM ai_reports WHERE created_at >= ?1",
+        [since_ms],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?)
 }
 
 /// Report history, newest first.

@@ -18,6 +18,9 @@ use tokio::task::JoinHandle;
 use crate::handlers::JobError;
 use crate::job::Job;
 
+/// How often to look for a finished session to review.
+const SESSION_CHECK_EVERY: Duration = Duration::from_secs(10 * 60);
+
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     /// Concurrent workers. The rate limiter is the real throttle; a few
@@ -81,6 +84,7 @@ pub enum EngineEvent {
     KeyGenerationChanged { key_gen_id: i64 },
     MetricsComputed { match_id: String },
     ReviewReady { match_id: String, report_id: i64 },
+    SessionReviewReady { scope: String, report_id: i64 },
 }
 
 impl EngineEvent {
@@ -99,6 +103,7 @@ impl EngineEvent {
             ),
             Self::KeyGenerationChanged { .. } => ("warn", "Riot API key changed; re-resolving accounts".into()),
             Self::ReviewReady { match_id, .. } => ("info", format!("AI review ready for {match_id}")),
+            Self::SessionReviewReady { .. } => ("info", "AI session review ready".into()),
             _ => return None,
         })
     }
@@ -214,6 +219,18 @@ impl Engine {
                     }
                     Err(RecvError::Lagged(_)) => {}
                     Err(RecvError::Closed) => break,
+                }
+            }
+        });
+        // Session reviews wait for a session to end, which no event signals:
+        // check now and then.
+        let checker = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(SESSION_CHECK_EVERY);
+            loop {
+                tick.tick().await;
+                if let Err(e) = checker.maybe_queue_session_review().await {
+                    tracing::warn!(error = ?e, "session review check failed");
                 }
             }
         });

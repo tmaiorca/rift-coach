@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::compute::{frame_before, lane_opponent};
+use crate::compute::{OBJECTIVE_MONSTERS, frame_before, lane_opponent};
 use crate::model::{Match, Participant, Timeline};
+use crate::zones::{Zone, zone_of};
 
 /// Summoner's Rift coordinate bounds, for projecting onto the minimap.
 pub const MAP_MIN: i32 = -120;
@@ -153,6 +154,34 @@ pub struct DeathContext {
     /// Gold in pocket at the last minute snapshot (approximate).
     pub unspent_gold: Option<i32>,
     pub shutdown_bounty: i32,
+    /// Map region relative to the player's team (approximate).
+    pub zone: Zone,
+    /// Killed by one enemy champion with no assists.
+    pub solo: bool,
+    /// Epic monster the enemy took within [`OBJECTIVE_AFTER_DEATH_MS`].
+    pub enemy_objective: Option<&'static str>,
+}
+
+/// A death "gives" an objective if the enemy takes it this soon after.
+pub const OBJECTIVE_AFTER_DEATH_MS: i64 = 60_000;
+/// A death counts as "while ahead" at this gold lead over the lane opponent.
+pub const AHEAD_GOLD: i32 = 500;
+
+impl DeathContext {
+    pub fn while_ahead(&self) -> bool {
+        self.gold_vs_opponent.is_some_and(|g| g >= AHEAD_GOLD)
+    }
+}
+
+pub fn objective_label(monster_type: &str) -> &'static str {
+    match monster_type {
+        "DRAGON" => "dragon",
+        "HORDE" => "voidgrubs",
+        "RIFTHERALD" => "Rift Herald",
+        "BARON_NASHOR" => "Baron",
+        "ATAKHAN" => "Atakhan",
+        _ => "objective",
+    }
 }
 
 /// Rough river diagonal: blue base is bottom-left, red top-right.
@@ -163,6 +192,17 @@ fn in_enemy_half(team_id: i32, x: i32, y: i32) -> bool {
 
 pub fn deaths_of(m: &Match, tl: &Timeline, subject: &Participant) -> Vec<DeathContext> {
     let opp = lane_opponent(&m.info, subject);
+    let epic: Vec<(i64, i32, &str)> = tl
+        .info
+        .frames
+        .iter()
+        .flat_map(|f| f.events.iter())
+        .filter(|e| e.kind == "ELITE_MONSTER_KILL")
+        .filter_map(|e| {
+            let t = e.monster_type.as_deref().filter(|t| OBJECTIVE_MONSTERS.contains(t))?;
+            Some((e.timestamp, e.killer_team_id?, t))
+        })
+        .collect();
     let mut out = Vec::new();
     for e in tl.info.frames.iter().flat_map(|f| f.events.iter()) {
         if e.kind != "CHAMPION_KILL" || e.victim_id != Some(subject.participant_id) {
@@ -185,6 +225,14 @@ pub fn deaths_of(m: &Match, tl: &Timeline, subject: &Participant) -> Vec<DeathCo
             gold_vs_opponent: me.zip(them).map(|(a, b)| a.total_gold - b.total_gold),
             unspent_gold: me.map(|p| p.current_gold),
             shutdown_bounty: e.shutdown_bounty.unwrap_or(0),
+            zone: zone_of(subject.team_id, pos.x, pos.y),
+            solo: killer.is_some() && e.assisting_participant_ids.is_empty(),
+            enemy_objective: epic
+                .iter()
+                .find(|(t, team, _)| {
+                    *team != subject.team_id && *t >= e.timestamp && *t - e.timestamp <= OBJECTIVE_AFTER_DEATH_MS
+                })
+                .map(|(_, _, kind)| objective_label(kind)),
         });
     }
     out

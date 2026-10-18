@@ -7,6 +7,7 @@ members = [
     "crates/ddragon",
     "crates/metrics",
     "crates/ai",
+    "crates/signals",
     "crates/coach",
     "crates/jobs",
     "cli",
@@ -31,3 +32,11 @@ unwrap_used = "warn"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Smaller dev builds: line tables are enough for backtraces, and dependencies
+# don't need debug info (keeps target/ from growing to tens of GB).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

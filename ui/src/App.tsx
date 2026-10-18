@@ -4,11 +4,14 @@ import { AmbientBackground } from "./components/AmbientBackground";
 import { StatusBar } from "./components/StatusBar";
 import { ChampionsContext } from "./lib/assets";
 import { Dashboard } from "./pages/Dashboard";
+import { Goals } from "./pages/Goals";
 import { Guide } from "./pages/Guide";
 import { MatchDetail } from "./pages/MatchDetail";
 import { Matches } from "./pages/Matches";
+import { Patterns } from "./pages/Patterns";
 import { Players } from "./pages/Players";
 import { Reports } from "./pages/Reports";
+import { Sessions } from "./pages/Sessions";
 import { Settings } from "./pages/Settings";
 import type {
   AccountView,
@@ -16,15 +19,29 @@ import type {
   AppSettings,
   ChampionEntry,
   EngineEvent,
+  GoalInput,
   MatchRow,
   StatusView,
 } from "./types";
 
-type Page = "dashboard" | "matches" | "match" | "players" | "reports" | "settings" | "guide";
+type Page =
+  | "dashboard"
+  | "matches"
+  | "match"
+  | "patterns"
+  | "sessions"
+  | "goals"
+  | "players"
+  | "reports"
+  | "settings"
+  | "guide";
 
 const NAV: { id: Page; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: "◈" },
   { id: "matches", label: "Matches", icon: "☰" },
+  { id: "patterns", label: "Patterns", icon: "⌖" },
+  { id: "sessions", label: "Sessions", icon: "◷" },
+  { id: "goals", label: "Goals", icon: "◎" },
   { id: "players", label: "Players", icon: "⚇" },
   { id: "reports", label: "AI reports", icon: "✦" },
   { id: "settings", label: "Settings", icon: "⚙" },
@@ -38,6 +55,7 @@ const SLOW_POLL_MS = 10000;
 interface UiState {
   page: Page;
   matchId: string | null;
+  sessionScope?: string | null;
 }
 
 export function App() {
@@ -54,6 +72,7 @@ function Shell() {
   const [champions, setChampions] = useState<Map<number, ChampionEntry>>(new Map());
   const [ui, setUi] = useState<UiState | null>(null);
   const [lookup, setLookup] = useState<string | null>(null);
+  const [goalDraft, setGoalDraft] = useState<GoalInput | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const refreshTimer = useRef<number | undefined>(undefined);
@@ -77,7 +96,12 @@ function Shell() {
     api.getStatus().then(setStatus, (e) => setError(String(e)));
     api.getSettings().then(setSettings, (e) => setError(String(e)));
     api.getUiState().then(
-      (s) => setUi({ page: (s?.page as Page) ?? "dashboard", matchId: (s?.matchId as string) ?? null }),
+      (s) =>
+        setUi({
+          page: (s?.page as Page) ?? "dashboard",
+          matchId: (s?.matchId as string) ?? null,
+          sessionScope: (s?.sessionScope as string) ?? null,
+        }),
       () => setUi({ page: "dashboard", matchId: null }),
     );
     api.listMatches(1000).then(setMatches, (e) => setError(String(e)));
@@ -90,9 +114,14 @@ function Shell() {
     const unlisten = onEngineEvent((ev: EngineEvent) => {
       if (ev.type === "key_status_changed") void refreshStatus();
       if (
-        ["match_stored", "timeline_stored", "metrics_computed", "review_ready", "job_failed"].includes(
-          ev.type,
-        )
+        [
+          "match_stored",
+          "timeline_stored",
+          "metrics_computed",
+          "review_ready",
+          "session_review_ready",
+          "job_failed",
+        ].includes(ev.type)
       )
         scheduleRefresh();
     });
@@ -115,8 +144,15 @@ function Shell() {
     return () => window.clearInterval(id);
   }, [busy, refreshStatus]);
 
-  const go = (page: Page, matchId: string | null = ui?.matchId ?? null) => setUi({ page, matchId });
-  const openMatch = (id: string) => setUi({ page: "match", matchId: id });
+  const go = (page: Page, matchId: string | null = ui?.matchId ?? null) =>
+    setUi((u) => ({ ...u, page, matchId }));
+  const openMatch = (id: string) => setUi((u) => ({ ...u, page: "match", matchId: id }));
+  const openSession = (scope: string | null) =>
+    setUi((u) => ({ ...u, page: "sessions", matchId: u?.matchId ?? null, sessionScope: scope }));
+  const draftGoal = (draft: GoalInput) => {
+    setGoalDraft(draft);
+    go("goals");
+  };
 
   const saveSettings = async (s: AppSettings) => {
     setSettings(s); // optimistic, so sliders feel instant
@@ -210,7 +246,35 @@ function Shell() {
                 ingestCount={settings.ingest_count}
                 onOpenMatch={openMatch}
                 onGoPlayers={() => go("players")}
+                onGoPatterns={() => go("patterns")}
+                onGoGoals={() => go("goals")}
                 onSync={sync}
+              />
+            )}
+            {page === "patterns" && (
+              <Patterns
+                refreshKey={refreshKey}
+                baselineGames={settings.baseline_games}
+                onOpenMatch={openMatch}
+                onMakeGoal={draftGoal}
+              />
+            )}
+            {page === "sessions" && (
+              <Sessions
+                refreshKey={refreshKey}
+                scope={ui.sessionScope ?? null}
+                onScope={openSession}
+                onOpenMatch={openMatch}
+                onOpenSettings={() => go("settings")}
+                onTrackFocus={draftGoal}
+              />
+            )}
+            {page === "goals" && (
+              <Goals
+                refreshKey={refreshKey}
+                draft={goalDraft}
+                onDraftUsed={() => setGoalDraft(null)}
+                onOpenMatch={openMatch}
               />
             )}
             {page === "matches" && <Matches matches={matches} onOpen={openMatch} />}
@@ -221,6 +285,7 @@ function Shell() {
                 refreshKey={refreshKey}
                 onBack={() => go("matches", null)}
                 onOpenSettings={() => go("settings")}
+                onTrackFocus={draftGoal}
                 onLookup={(id) => {
                   setLookup(id);
                   go("players");
@@ -239,7 +304,9 @@ function Shell() {
                 onView={() => go("dashboard")}
               />
             )}
-            {page === "reports" && <Reports refreshKey={refreshKey} onOpenMatch={openMatch} />}
+            {page === "reports" && (
+              <Reports refreshKey={refreshKey} onOpenMatch={openMatch} onOpenSession={openSession} />
+            )}
             {page === "settings" && (
               <Settings
                 settings={settings}

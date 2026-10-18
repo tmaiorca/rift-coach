@@ -212,8 +212,8 @@ pub async fn match_detail(state: State<'_, AppState>, match_id: String) -> CmdRe
         .engine
         .db()
         .call(move |c| {
-            let games = settings::app(c)?.baseline_games;
-            Ok(rc_coach::detail::match_detail(c, account_id, &match_id, games))
+            let s = settings::app(c)?;
+            Ok(rc_coach::detail::match_detail(c, account_id, &match_id, s.baseline_games, s.session_gap_min))
         })
         .await
         .map_err(err)?
@@ -259,6 +259,145 @@ pub fn metric_definitions() -> Vec<MetricDef> {
     METRICS.to_vec()
 }
 
+// ---------- patterns, goals, sessions ----------
+
+/// Recurring patterns and win correlation over the newest `window` games
+/// (default: the look-back window), optionally one role.
+#[tauri::command]
+pub async fn patterns(
+    state: State<'_, AppState>,
+    window: Option<u32>,
+    role: Option<String>,
+) -> CmdResult<rc_coach::patterns::PatternsView> {
+    let account_id = active_account_id(&state).await?;
+    state
+        .engine
+        .db()
+        .call(move |c| {
+            let s = settings::app(c)?;
+            let window = window.unwrap_or(s.baseline_games).clamp(5, 1000);
+            rc_coach::patterns::patterns(c, account_id, window, role.as_deref(), s.session_gap_min)
+        })
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn list_goals(state: State<'_, AppState>, include_ended: bool) -> CmdResult<Vec<rc_coach::goals::GoalView>> {
+    let Ok(account_id) = active_account_id(&state).await else { return Ok(vec![]) };
+    state
+        .engine
+        .db()
+        .call(move |c| Ok(rc_coach::goals::list(c, account_id, include_ended)))
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn create_goal(
+    state: State<'_, AppState>,
+    input: rc_coach::goals::GoalInput,
+) -> CmdResult<rc_coach::goals::GoalView> {
+    let account_id = active_account_id(&state).await?;
+    let view = state
+        .engine
+        .db()
+        .call(move |c| {
+            let games = settings::app(c)?.baseline_games;
+            Ok(rc_coach::goals::create(c, account_id, &input, games))
+        })
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+    state.engine.log_activity("info", format!("New focus goal: {}", view.title)).await;
+    Ok(view)
+}
+
+#[tauri::command]
+pub async fn set_goal_status(state: State<'_, AppState>, goal_id: i64, status: String) -> CmdResult<()> {
+    state
+        .engine
+        .db()
+        .call(move |c| Ok(rc_coach::goals::set_status(c, goal_id, &status)))
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn delete_goal(state: State<'_, AppState>, goal_id: i64) -> CmdResult<()> {
+    state.engine.db().call(move |c| rc_store::goals::delete(c, goal_id)).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn list_sessions(
+    state: State<'_, AppState>,
+    limit: u32,
+) -> CmdResult<Vec<rc_coach::sessions::SessionSummary>> {
+    let Ok(account_id) = active_account_id(&state).await else { return Ok(vec![]) };
+    state
+        .engine
+        .db()
+        .call(move |c| {
+            let gap = settings::app(c)?.session_gap_min;
+            rc_coach::sessions::list(c, account_id, gap, limit.min(500) as usize)
+        })
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn session_detail(state: State<'_, AppState>, scope: String) -> CmdResult<rc_coach::sessions::SessionDetail> {
+    let account_id = active_account_id(&state).await?;
+    state
+        .engine
+        .db()
+        .call(move |c| {
+            let s = settings::app(c)?;
+            Ok(rc_coach::sessions::detail(c, account_id, &scope, s.session_gap_min, s.baseline_games))
+        })
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn generate_session_review(state: State<'_, AppState>, scope: String, force: bool) -> CmdResult<Report> {
+    let account_id = active_account_id(&state).await?;
+    let settings = state.engine.db().call(|c| settings::app(c)).await.map_err(err)?;
+    let client = rc_coach::provider::client_from_settings(&settings.ai).map_err(err)?;
+    let opts = rc_coach::review::ReviewOptions::from_settings(&settings, force);
+    let result = rc_coach::review::session_review(state.engine.db(), &client, account_id, &scope, &opts).await;
+    match &result {
+        Ok(r) => state.engine.log_activity("info", format!("AI session review ready ({})", r.model)).await,
+        Err(e) => state.engine.log_activity("error", format!("AI session review failed: {e}")).await,
+    }
+    result.map_err(err)
+}
+
+#[tauri::command]
+pub async fn session_facts(state: State<'_, AppState>, scope: String) -> CmdResult<serde_json::Value> {
+    let account_id = active_account_id(&state).await?;
+    let settings = state.engine.db().call(|c| settings::app(c)).await.map_err(err)?;
+    let opts = rc_coach::review::ReviewOptions::from_settings(&settings, false);
+    rc_coach::review::session_facts(state.engine.db(), account_id, &scope, &opts).await.map_err(err)
+}
+
+#[derive(Serialize)]
+pub struct AiUsage {
+    pub reports_30d: i64,
+    pub tokens_30d: i64,
+    pub limit: Option<u64>,
+}
+
+#[tauri::command]
+pub async fn ai_usage(state: State<'_, AppState>) -> CmdResult<AiUsage> {
+    let (reports_30d, tokens_30d) = rc_coach::review::usage(state.engine.db()).await.map_err(err)?;
+    let limit = state.engine.db().call(|c| Ok(settings::app(c)?.ai.monthly_token_limit)).await.map_err(err)?;
+    Ok(AiUsage { reports_30d, tokens_30d, limit })
+}
+
 // ---------- AI ----------
 
 #[tauri::command]
@@ -270,11 +409,7 @@ pub async fn generate_review(state: State<'_, AppState>, match_id: String, force
     let patch =
         state.engine.db().call(move |c| matches::patch_of_match(c, &id)).await.map_err(err)?.unwrap_or_default();
     let items = state.engine.item_catalog(&patch).await.ok();
-    let opts = rc_coach::review::ReviewOptions {
-        baseline_games: settings.baseline_games,
-        max_tokens: settings.ai.max_tokens,
-        force,
-    };
+    let opts = rc_coach::review::ReviewOptions::from_settings(&settings, force);
     let result =
         rc_coach::review::post_game_review(state.engine.db(), &client, account_id, &match_id, &opts, items).await;
     match &result {
@@ -288,8 +423,9 @@ pub async fn generate_review(state: State<'_, AppState>, match_id: String, force
 #[tauri::command]
 pub async fn review_facts(state: State<'_, AppState>, match_id: String) -> CmdResult<serde_json::Value> {
     let account_id = active_account_id(&state).await?;
-    let games = state.engine.db().call(|c| Ok(settings::app(c)?.baseline_games)).await.map_err(err)?;
-    rc_coach::review::post_game_facts(state.engine.db(), account_id, &match_id, games, None).await.map_err(err)
+    let settings = state.engine.db().call(|c| settings::app(c)).await.map_err(err)?;
+    let opts = rc_coach::review::ReviewOptions::from_settings(&settings, false);
+    rc_coach::review::post_game_facts(state.engine.db(), account_id, &match_id, &opts, None).await.map_err(err)
 }
 
 #[tauri::command]
@@ -383,6 +519,12 @@ pub async fn save_settings(state: State<'_, AppState>, new: AppSettings) -> CmdR
     }
     if !(500..=32_000).contains(&new.ai.max_tokens) {
         return Err("Max AI output tokens must be between 500 and 32000.".into());
+    }
+    if !(10..=480).contains(&new.session_gap_min) {
+        return Err("The session gap must be between 10 and 480 minutes.".into());
+    }
+    if new.ai.monthly_token_limit.is_some_and(|l| l < 10_000) {
+        return Err("A token cap below 10,000 would block most reviews; use at least 10,000 or no cap.".into());
     }
     new.ai.provider.parse::<ProviderKind>()?;
     state

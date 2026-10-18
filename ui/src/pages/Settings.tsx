@@ -1,7 +1,7 @@
 import { useContext, useEffect, useState } from "react";
 import { api } from "../api";
 import { ChampionsContext } from "../lib/assets";
-import type { AppSettings, ProviderId, ProviderInfo, StatusView } from "../types";
+import type { AiUsage, AppSettings, ProviderId, ProviderInfo, StatusView } from "../types";
 
 interface Props {
   settings: AppSettings;
@@ -279,9 +279,16 @@ function AiSection({ settings, save }: { settings: AppSettings; save: Save }) {
         checked={ai.auto_post_game}
         onChange={(v) => save((s) => ({ ...s, ai: { ...s.ai, auto_post_game: v } }))}
       />
+      <Toggle
+        label="Automatically review each play session"
+        hint="Once no game has been played for the session gap (Data & history), review the session that just ended. Only sessions with 2+ Summoner's Rift games from the last day."
+        checked={ai.auto_session}
+        onChange={(v) => save((s) => ({ ...s, ai: { ...s.ai, auto_session: v } }))}
+      />
+      <TokenCap settings={settings} save={save} />
       <p className="muted small-text">
-        On-demand reviews are always available from any match. Session and weekly reports arrive in later
-        phases; every report is kept on the Reports page.
+        On-demand reviews are always available from any match and on the Sessions page. Weekly reports arrive
+        in a later phase; every report is kept on the AI reports page.
       </p>
       <div className="form-row">
         <button
@@ -296,6 +303,46 @@ function AiSection({ settings, save }: { settings: AppSettings; save: Save }) {
       </div>
       {msg && <div className={`banner ${msg.tone === "error" ? "error" : "ok"}`}>{msg.text}</div>}
     </section>
+  );
+}
+
+function TokenCap({ settings, save }: { settings: AppSettings; save: Save }) {
+  const limit = settings.ai.monthly_token_limit;
+  const [usage, setUsage] = useState<AiUsage | null>(null);
+  const [text, setText] = useState(limit === null ? "" : String(limit));
+  const [prev, setPrev] = useState(limit);
+  if (limit !== prev) {
+    setPrev(limit);
+    setText(limit === null ? "" : String(limit));
+  }
+  useEffect(() => {
+    api.aiUsage().then(setUsage, () => {});
+  }, [limit]);
+  const commit = () => {
+    const t = text.replace(/[^\d]/g, "");
+    const next = t === "" ? null : Number(t);
+    if (next !== limit) void save((s) => ({ ...s, ai: { ...s.ai, monthly_token_limit: next } }));
+  };
+  // Typical cost: a game review is about 5,000 tokens.
+  return (
+    <div className="field">
+      <label>Token cap (last 30 days)</label>
+      <input
+        value={text}
+        placeholder="No cap"
+        inputMode="numeric"
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === "Enter" && commit()}
+      />
+      <span className="muted small-text">
+        {usage
+          ? `Used ${usage.tokens_30d.toLocaleString()} tokens in ${usage.reports_30d} reports over the last 30 days. `
+          : ""}
+        A game review uses about 5,000 tokens. When the cap is reached, reviews stop (manual and automatic)
+        until older ones age out. Leave empty for no cap.
+      </span>
+    </div>
   );
 }
 
@@ -338,6 +385,22 @@ function DataSection({
         />
         <span className="muted small-text">
           About 100 games take 4–5 minutes with a personal key. Already stored games are skipped.
+        </span>
+      </div>
+      <div className="field">
+        <label>
+          Session gap: <b>{settings.session_gap_min} minutes</b>
+        </label>
+        <input
+          type="range"
+          min={15}
+          max={180}
+          step={5}
+          value={settings.session_gap_min}
+          onChange={(e) => save((s) => ({ ...s, session_gap_min: Number(e.target.value) }))}
+        />
+        <span className="muted small-text">
+          Games less than this far apart count as one play session (Sessions page, tilt patterns).
         </span>
       </div>
       <Toggle

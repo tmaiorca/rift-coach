@@ -50,6 +50,7 @@ If `cargo` isn't on PATH in an old shell: `$env:PATH = "$env:USERPROFILE\.cargo\
 | UI format | `npm run format` / `npm run format:check` |
 | Ingest via CLI | `cargo run -p rc-cli -- ingest "TapRooted#BTC" --count 100` |
 | Metrics + percentiles for a game | `cargo run -p rc-cli -- analyze [MATCH_ID]` (`--facts` prints the AI input) |
+| Patterns, win links, sessions | `cargo run -p rc-cli -- patterns --games 100 [--role MIDDLE] [--sessions]` |
 | Status / role summary | `cargo run -p rc-cli -- status` / `-- summary` |
 | Endpoint smoke test (live) | `cargo run -p rc-cli -- smoke "TapRooted#BTC"` |
 | Record + scrub fixtures | `cargo run -p rc-cli -- record-fixtures "TapRooted#BTC"` then `-- scrub-fixtures --keep "TapRooted#BTC"` |
@@ -64,8 +65,11 @@ Set `RIFT_COACH_HOME` to use a different data folder (e.g. a scratch dir), inste
 - `crates/store` (`rc-store`): SQLite (WAL) + migrations in `crates/store/migrations/`, data access
 - `crates/ddragon` (`rc-ddragon`): Data Dragon cache, versioned by patch
 - `crates/metrics` (`rc-metrics`): pure metric computation from match/timeline JSON, metric registry (`defs.rs`), percentiles, chart/map views
+- `crates/signals` (`rc-signals`): pure cross-game detectors (`rules.rs` per-game rules, `cross.rs`
+  percentile/death-zone/session detectors), win correlation, session grouping, goal progress
 - `crates/ai` (`rc-ai`): LLM providers (Anthropic, OpenAI, Gemini, OpenAI-compatible) behind `AiClient`
-- `crates/coach` (`rc-coach`): comparisons vs populations, match detail view, AI facts, prompt, validation, report generation
+- `crates/coach` (`rc-coach`): comparisons vs populations, match detail view, patterns/goals/sessions
+  (loads store data into rc-signals), AI facts, prompts, validation, report generation (post-game, session, token cap)
 - `crates/jobs` (`rc-jobs`): persistent job queue engine + handlers (ingest, metrics, auto review), `build_engine`
 - `cli` (`rc-cli`): dev CLI. `src-tauri` (`rift-coach`): app shell + commands. `ui/`: React app
   (`pages/` per screen, `components/` shared, `lib/` formatting + cached Data Dragon images)
@@ -89,6 +93,11 @@ Set `RIFT_COACH_HOME` to use a different data folder (e.g. a scratch dir), inste
   fixtures, bump `METRICS_VERSION` (stored matches recompute on next start),
   and document it in README "How the numbers work". Lane-diff metrics are
   `zero_sum` (compared with the player's own games only).
+- New pattern: a `Rule` in `rc_signals::rules::RULES` (per-game test + threshold) or a cross-game
+  detector in `cross.rs`; unit-test it with synthetic games; document it in README "Patterns and
+  what wins your games". Every number in a signal's `detail` must come from the data (the AI may quote it).
+- Dev builds use `debug = "line-tables-only"` to keep `target/` small; the machine's C: drive is
+  nearly full, so run `cargo clean` if builds fail with "no space on device".
 - Settings: `rc_store::settings::AppSettings` (serde defaults, so new fields are
   safe) mirrored in `ui/src/types.ts`. UI navigation state is free-form JSON
   under the `ui_state` key. No secrets in settings.
@@ -100,5 +109,8 @@ Set `RIFT_COACH_HOME` to use a different data folder (e.g. a scratch dir), inste
 - Phase 2 (metrics, baselines, match detail, charts, death map) plus user-requested
   extras (AI post-game review pulled forward from Phase 3, settings page,
   player lookup, ambient background, in-app guide, persisted activity/UI
-  state): done 2026-10-17, pending review.
-- Next: Phase 3: cross-game signal detection, win-correlation, focus goals, session reviews.
+  state): done 2026-10-17, reviewed.
+- Phase 3 (patterns/signals, win correlation, death heat map, focus goals, session
+  reviews, auto session review, AI token cap): done 2026-10-18, pending review.
+- Next: Phase 4: live poller (own numbers only), game-aware scheduling, live view,
+  auto-review on game end, footprint measurement.

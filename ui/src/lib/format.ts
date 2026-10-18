@@ -1,4 +1,4 @@
-import type { MetricUnit } from "../types";
+import type { MetricUnit, Zone } from "../types";
 
 export const ROLE_LABEL: Record<string, string> = {
   TOP: "Top",
@@ -9,6 +9,18 @@ export const ROLE_LABEL: Record<string, string> = {
 };
 
 export const roleLabel = (r: string | null | undefined) => (r ? (ROLE_LABEL[r] ?? r) : "-");
+
+export const ZONE_LABEL: Record<Zone, string> = {
+  own_base: "your base",
+  enemy_base: "enemy base",
+  top_lane: "top lane",
+  mid_lane: "mid lane",
+  bot_lane: "bot lane",
+  top_river: "top river",
+  bot_river: "bot river",
+  own_jungle: "your jungle",
+  enemy_jungle: "enemy jungle",
+};
 
 /** 754 → "12:34" */
 export function clock(seconds: number): string {

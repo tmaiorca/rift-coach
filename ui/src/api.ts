@@ -3,16 +3,22 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AccountView,
   ActivityEntry,
+  AiUsage,
   AppSettings,
   ChampionEntry,
   DashboardView,
   EngineEvent,
+  Goal,
+  GoalInput,
   KeyStatus,
   MatchDetail,
   MatchRow,
   MetricDef,
+  PatternsView,
   ProviderInfo,
   Report,
+  SessionDetail,
+  SessionSummary,
   StatusView,
 } from "./types";
 
@@ -34,6 +40,20 @@ export const api = {
   matchDetail: (matchId: string) => invoke<MatchDetail>("match_detail", { matchId }),
   dashboard: () => invoke<DashboardView>("dashboard"),
   metricDefinitions: () => invoke<MetricDef[]>("metric_definitions"),
+
+  patterns: (window: number | null = null, role: string | null = null) =>
+    invoke<PatternsView>("patterns", { window, role }),
+  listGoals: (includeEnded = false) => invoke<Goal[]>("list_goals", { includeEnded }),
+  createGoal: (input: GoalInput) => invoke<Goal>("create_goal", { input }),
+  setGoalStatus: (goalId: number, status: Goal["status"]) =>
+    invoke<void>("set_goal_status", { goalId, status }),
+  deleteGoal: (goalId: number) => invoke<void>("delete_goal", { goalId }),
+  listSessions: (limit = 100) => invoke<SessionSummary[]>("list_sessions", { limit }),
+  sessionDetail: (scope: string) => invoke<SessionDetail>("session_detail", { scope }),
+  generateSessionReview: (scope: string, force: boolean) =>
+    invoke<Report>("generate_session_review", { scope, force }),
+  sessionFacts: (scope: string) => invoke<unknown>("session_facts", { scope }),
+  aiUsage: () => invoke<AiUsage>("ai_usage"),
 
   generateReview: (matchId: string, force: boolean) => invoke<Report>("generate_review", { matchId, force }),
   reviewFacts: (matchId: string) => invoke<unknown>("review_facts", { matchId }),

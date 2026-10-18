@@ -7,6 +7,7 @@ pub mod defs;
 pub mod detail;
 pub mod model;
 pub mod percentile;
+pub mod zones;
 
 pub use compute::{METRICS_VERSION, MatchMetrics, MetricMap, MetricsError, compute, parse_match, parse_timeline};
 pub use defs::{METRICS, MetricDef};

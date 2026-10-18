@@ -140,6 +140,16 @@ pub fn validate(report: &Value, facts: &Value) -> Validation {
     {
         s.push(format!("`next_game_focus.metric` \"{m}\" is not a metric id from the facts."));
     }
+    let focus = &report["next_game_focus"];
+    if !focus["comparator"].is_null() && !matches!(focus["comparator"].as_str(), Some("at_most" | "at_least" | "")) {
+        s.push("`next_game_focus.comparator` must be \"at_most\" or \"at_least\".".into());
+    }
+    if !focus["target"].is_null() && !focus["target"].is_number() {
+        s.push("`next_game_focus.target` must be a number.".into());
+    }
+    if !report["goal_feedback"].is_null() && !report["goal_feedback"].is_string() {
+        s.push("`goal_feedback` must be a string (or omitted).".into());
+    }
     if !matches!(report["confidence"].as_str(), Some("low" | "medium" | "high")) {
         s.push("`confidence` must be \"low\", \"medium\" or \"high\".".into());
     }
@@ -232,5 +242,33 @@ mod tests {
         r["confidence"] = json!("very");
         let v = validate(&r, &facts());
         assert_eq!(v.structural.len(), 2, "{:?}", v.structural);
+    }
+
+    #[test]
+    fn focus_target_and_goal_feedback() {
+        let mut r = report("fine");
+        r["next_game_focus"]["comparator"] = json!("at_least");
+        r["next_game_focus"]["target"] = json!(60);
+        r["goal_feedback"] = json!("Your goal average is 49 so far.");
+        let v = validate(&r, &facts());
+        assert!(v.is_clean(), "{v:?}");
+
+        r["next_game_focus"]["comparator"] = json!("about");
+        r["next_game_focus"]["target"] = json!("sixty");
+        r["goal_feedback"] = json!("Your goal average is 37 so far.");
+        let v = validate(&r, &facts());
+        assert_eq!(v.structural.len(), 2, "{:?}", v.structural);
+        // goal_feedback is prose: its numbers are checked.
+        assert_eq!(v.untraced_numbers, vec!["37".to_string()]);
+    }
+
+    #[test]
+    fn pattern_and_goal_ids_are_evidence() {
+        let mut f = facts();
+        f["patterns"] = json!([{"id": "pattern:early_deaths", "rule": "You died 2 or more times before 14:00"}]);
+        f["goals"] = json!([{"id": "goal_4", "average_so_far": 1.5}]);
+        let mut r = report("Early deaths again; goal average 1.5.");
+        r["improve"][0]["evidence"] = json!(["pattern:early_deaths", "goal_4"]);
+        assert!(validate(&r, &f).is_clean(), "{:?}", validate(&r, &f));
     }
 }

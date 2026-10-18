@@ -6,6 +6,7 @@
 pub mod accounts;
 pub mod activity;
 pub mod ddragon;
+pub mod goals;
 pub mod jobs;
 pub mod matches;
 pub mod metrics;
@@ -41,6 +42,7 @@ fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(include_str!("../migrations/001_init.sql")),
         M::up(include_str!("../migrations/002_metrics_ai_activity.sql")),
+        M::up(include_str!("../migrations/003_signals_goals_sessions.sql")),
     ])
 }
 

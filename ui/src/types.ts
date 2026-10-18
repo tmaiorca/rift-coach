@@ -207,7 +207,21 @@ export interface DeathContext {
   gold_vs_opponent: number | null;
   unspent_gold: number | null;
   shutdown_bounty: number;
+  zone: Zone;
+  solo: boolean;
+  enemy_objective: string | null;
 }
+
+export type Zone =
+  | "own_base"
+  | "enemy_base"
+  | "top_lane"
+  | "mid_lane"
+  | "bot_lane"
+  | "top_river"
+  | "bot_river"
+  | "own_jungle"
+  | "enemy_jungle";
 
 export interface ReviewItem {
   title: string;
@@ -222,12 +236,15 @@ export interface ReviewFix {
   evidence: string[];
 }
 
+export type Comparator = "at_most" | "at_least";
+
 export interface ReviewOutput {
   summary: string;
   went_well: ReviewItem[];
   improve: ReviewItem[];
   priority_fixes: ReviewFix[];
-  next_game_focus: { goal: string; metric?: string };
+  next_game_focus: { goal: string; metric?: string; comparator?: Comparator; target?: number };
+  goal_feedback?: string;
   confidence: "low" | "medium" | "high";
   confidence_reason?: string;
 }
@@ -237,6 +254,7 @@ export interface Report {
   kind: string;
   account_id: number;
   match_id: string | null;
+  scope: string | null;
   provider: string;
   model: string;
   prompt_version: string;
@@ -259,12 +277,15 @@ export interface MatchDetail {
   series: Series | null;
   events: MapEvent[];
   deaths: DeathContext[];
+  patterns: MatchPattern[];
   report: Report | null;
 }
 
 export interface GameMetrics {
   match_id: string;
+  participant_id: number;
   game_start_ms: number;
+  duration_s: number;
   champion_name: string;
   champion_id: number;
   team_position: string | null;
@@ -302,12 +323,15 @@ export interface AppSettings {
   baseline_games: number;
   show_other_queues: boolean;
   active_account_id: number | null;
+  session_gap_min: number;
   ai: {
     provider: ProviderId;
     model: string;
     base_url: string | null;
     auto_post_game: boolean;
+    auto_session: boolean;
     max_tokens: number;
+    monthly_token_limit: number | null;
   };
   appearance: {
     animated_background: boolean;
@@ -333,4 +357,218 @@ export type EngineEvent =
   | { type: "key_status_changed"; status: KeyStatus }
   | { type: "key_generation_changed"; key_gen_id: number }
   | { type: "metrics_computed"; match_id: string }
-  | { type: "review_ready"; match_id: string; report_id: number };
+  | { type: "review_ready"; match_id: string; report_id: number }
+  | { type: "session_review_ready"; scope: string; report_id: number };
+
+// ---------- patterns (rc-signals via rc-coach) ----------
+
+export type Polarity = "weakness" | "strength";
+export type Severity = "low" | "medium" | "high";
+
+export interface Evidence {
+  match_id: string;
+  t_s: number | null;
+  x: number | null;
+  y: number | null;
+  note: string;
+}
+
+export interface GoalSuggestion {
+  metric: string;
+  comparator: Comparator;
+  target: number;
+}
+
+export interface Signal {
+  id: string;
+  kind: string;
+  polarity: Polarity;
+  severity: Severity;
+  score: number;
+  title: string;
+  detail: string;
+  tip: string;
+  games_considered: number;
+  games_affected: number;
+  rate_pct: number;
+  metric: string | null;
+  win_rate_affected: number | null;
+  win_rate_other: number | null;
+  evidence: Evidence[];
+  goal: GoalSuggestion | null;
+}
+
+export type LinkStrength = "none" | "weak" | "moderate" | "strong";
+
+export interface WinLink {
+  metric: string;
+  label: string;
+  early: boolean;
+  games: number;
+  wins: number;
+  higher_in_wins_pct: number;
+  win_median: number;
+  loss_median: number;
+  win_rate_above: number | null;
+  win_rate_below: number | null;
+  p_value: number;
+  strength: LinkStrength;
+  summary: string;
+}
+
+export interface MapDeath {
+  match_id: string;
+  t_s: number;
+  x: number;
+  y: number;
+  zone: Zone;
+  win: boolean;
+  blue_side: boolean;
+}
+
+export interface PatternsView {
+  window: number;
+  role: string | null;
+  roles: [string, number][];
+  games: number;
+  wins: number;
+  signals: Signal[];
+  win_links: WinLink[];
+  deaths: MapDeath[];
+}
+
+export interface GameFlag {
+  kind: string;
+  title: string;
+  polarity: Polarity;
+  what: string;
+  evidence: Evidence[];
+}
+
+export interface MatchPattern extends GameFlag {
+  recurring: {
+    games_affected: number;
+    games_considered: number;
+    rate_pct: number;
+    win_rate_affected: number | null;
+    win_rate_other: number | null;
+  } | null;
+}
+
+// ---------- goals ----------
+
+export interface GoalGame {
+  match_id: string;
+  game_start_ms: number;
+  champion_name: string;
+  champion_id: number;
+  win: boolean;
+  value: number;
+  met: boolean;
+}
+
+export interface GoalProgress {
+  games_played: number;
+  games_total: number;
+  average: number | null;
+  games_met: number;
+  on_track: boolean | null;
+  done: boolean;
+  improvement: number | null;
+  games: GoalGame[];
+}
+
+export interface Goal {
+  id: number;
+  account_id: number;
+  metric: string;
+  comparator: Comparator;
+  target: number;
+  games: number;
+  role: string | null;
+  champion_name: string | null;
+  baseline: number | null;
+  source: "user" | "ai" | "pattern";
+  note: string | null;
+  status: "active" | "completed" | "abandoned";
+  achieved: boolean | null;
+  created_at: number;
+  ended_at: number | null;
+  label: string;
+  unit: MetricUnit;
+  decimals: number;
+  higher_is_better: boolean | null;
+  title: string;
+  progress: GoalProgress;
+}
+
+export interface GoalInput {
+  metric: string;
+  comparator: Comparator;
+  target: number;
+  games: number;
+  role: string | null;
+  champion_name: string | null;
+  source?: "user" | "ai" | "pattern";
+  note?: string | null;
+}
+
+// ---------- sessions ----------
+
+export interface SessionSummary {
+  scope: string;
+  first_match_id: string;
+  start_ms: number;
+  end_ms: number;
+  games: number;
+  rift_games: number;
+  wins: number;
+  losses: number;
+  champion_ids: number[];
+  has_report: boolean;
+}
+
+export interface SessionGame {
+  summary: MatchSummary;
+  queue_name: string;
+  is_standard_rift: boolean;
+  metrics: Record<string, number>;
+  flags: GameFlag[];
+}
+
+export interface Aggregate {
+  metric: string;
+  label: string;
+  unit: MetricUnit;
+  decimals: number;
+  higher_is_better: boolean | null;
+  session: number;
+  baseline: number | null;
+  better: boolean | null;
+  games: number;
+}
+
+export interface SessionPattern {
+  kind: string;
+  title: string;
+  what: string;
+  polarity: Polarity;
+  session_games_affected: number;
+  session_games: number;
+  baseline_rate_pct: number | null;
+}
+
+export interface SessionDetail {
+  summary: SessionSummary;
+  games: SessionGame[];
+  aggregates: Aggregate[];
+  patterns: SessionPattern[];
+  baseline_games: number;
+  report: Report | null;
+}
+
+export interface AiUsage {
+  reports_30d: number;
+  tokens_30d: number;
+  limit: number | null;
+}

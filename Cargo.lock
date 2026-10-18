@@ -3228,6 +3228,7 @@ dependencies = [
  "rc-ai",
  "rc-common",
  "rc-metrics",
+ "rc-signals",
  "rc-store",
  "regex",
  "serde",
@@ -3312,6 +3313,14 @@ dependencies = [
  "tracing",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "rc-signals"
+version = "0.1.0"
+dependencies = [
+ "rc-metrics",
+ "serde",
 ]
 
 [[package]]

@@ -45,6 +45,12 @@ fn computes_laning_and_macro_metrics_for_the_player() {
     assert!((me["first_item_min"] - 640.237 / 60.0).abs() < 1e-9);
     assert!(me["dmg_share"] > 0.0 && me["dmg_share"] <= 100.0);
     assert!(me["obj_part"] >= 0.0 && me["obj_part"] <= 100.0);
+    // Deaths at 10:22 (+519 gold) ahead; 7:35, 13:27 and 24:28 were
+    // followed by enemy voidgrubs/dragon within 60 s; 10:22 and 22:48 were
+    // past the river.
+    assert_eq!(me["deaths_ahead"], 1.0);
+    assert_eq!(me["deaths_before_obj"], 3.0);
+    assert_eq!(me["deaths_enemy_side"], 2.0);
     // Game is 27:45; 15-minute metrics exist.
     assert!(me.contains_key("xp_diff_15"));
 }
@@ -75,4 +81,13 @@ fn detail_views() {
     let deaths = deaths_of(&m, &tl, me);
     assert_eq!(deaths.len(), 7);
     assert_eq!(deaths.iter().filter(|d| d.before_14).count(), 3);
+    use rc_metrics::zones::Zone;
+    let zones: Vec<Zone> = deaths.iter().map(|d| d.zone).collect();
+    assert_eq!(
+        zones,
+        [Zone::TopRiver, Zone::BotLane, Zone::MidLane, Zone::EnemyJungle, Zone::BotRiver, Zone::MidLane, Zone::BotLane]
+    );
+    assert_eq!(deaths[0].enemy_objective, Some("voidgrubs"));
+    assert_eq!(deaths[2].enemy_objective, Some("dragon"));
+    assert!(!deaths.iter().any(|d| d.solo), "every death had assists");
 }

@@ -198,6 +198,33 @@ pub const METRICS: &[MetricDef] = &[
         0,
         "Bounty gold the enemy earned by killing you.",
     ),
+    approx(def(
+        "deaths_ahead",
+        "Deaths while ahead",
+        Macro,
+        Count,
+        Some(false),
+        0,
+        "Deaths while at least 500 gold ahead of your lane opponent (minute snapshot before the death).",
+    )),
+    def(
+        "deaths_before_obj",
+        "Deaths before enemy objectives",
+        Macro,
+        Count,
+        Some(false),
+        0,
+        "Deaths followed within 60 s by the enemy taking a dragon, voidgrubs, Rift Herald, Baron or Atakhan.",
+    ),
+    approx(def(
+        "deaths_enemy_side",
+        "Deaths on the enemy side",
+        Macro,
+        Count,
+        Some(false),
+        0,
+        "Deaths past the river, on the enemy's half of the map.",
+    )),
     def(
         "max_team_lead",
         "Biggest team gold lead",
@@ -265,9 +292,63 @@ pub fn get(key: &str) -> Option<&'static MetricDef> {
     METRICS.iter().find(|d| d.key == key)
 }
 
+/// Players in a `teamPosition`, plural ("mid laners").
+pub fn role_label(role: &str) -> &'static str {
+    match role {
+        "TOP" => "top laners",
+        "JUNGLE" => "junglers",
+        "MIDDLE" => "mid laners",
+        "BOTTOM" => "ADCs",
+        "UTILITY" => "supports",
+        _ => "players",
+    }
+}
+
+/// A label for use mid-sentence: "Kill participation" → "kill
+/// participation", but acronyms stay ("CS at 10:00", "KDA").
+pub fn lower_label(label: &str) -> String {
+    let first = label.split_whitespace().next().unwrap_or_default();
+    if first.len() > 1 && first.chars().all(|c| c.is_ascii_uppercase()) {
+        return label.to_owned();
+    }
+    let mut c = label.chars();
+    c.next().map_or_else(String::new, |f| f.to_lowercase().chain(c).collect())
+}
+
+/// A `teamPosition` as a short adjective ("mid").
+pub fn role_name(role: &str) -> &'static str {
+    match role {
+        "TOP" => "top",
+        "JUNGLE" => "jungle",
+        "MIDDLE" => "mid",
+        "BOTTOM" => "ADC",
+        "UTILITY" => "support",
+        _ => "other",
+    }
+}
+
+/// Formats a value the way the UI and AI facts show it (minutes as m:ss).
+pub fn format_value(d: &MetricDef, v: f64) -> String {
+    match d.unit {
+        Unit::Minutes => {
+            let s = (v * 60.0).round().max(0.0) as i64;
+            format!("{}:{:02}", s / 60, s % 60)
+        }
+        Unit::Percent => format!("{v:.0$}%", usize::from(d.decimals)),
+        _ => format!("{v:.0$}", usize::from(d.decimals)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lower_labels() {
+        assert_eq!(lower_label("Kill participation"), "kill participation");
+        assert_eq!(lower_label("CS per minute"), "CS per minute");
+        assert_eq!(lower_label("KDA"), "KDA");
+    }
 
     #[test]
     fn keys_are_unique() {

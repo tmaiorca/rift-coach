@@ -4,8 +4,11 @@
 pub mod analysis;
 pub mod detail;
 pub mod facts;
+pub mod goals;
+pub mod patterns;
 pub mod provider;
 pub mod review;
+pub mod sessions;
 pub mod validate;
 
 #[derive(Debug, thiserror::Error)]
@@ -18,6 +21,9 @@ pub enum CoachError {
     Ai(#[from] rc_ai::AiError),
     #[error("not found: {0}")]
     NotFound(String),
+    /// The monthly AI token cap is reached.
+    #[error("{0}")]
+    Budget(String),
     #[error("{0}")]
     Invalid(String),
 }

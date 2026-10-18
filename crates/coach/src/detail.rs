@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::CoachError;
 use crate::analysis::{MetricComparison, compare_metrics};
+use crate::patterns::{MatchPattern, match_patterns};
 
 pub const POST_GAME: &str = "post_game";
 
@@ -75,6 +76,8 @@ pub struct MatchDetail {
     pub series: Option<Series>,
     pub events: Vec<MapEvent>,
     pub deaths: Vec<DeathContext>,
+    /// Rule patterns in this game, marked when they recur in your games.
+    pub patterns: Vec<MatchPattern>,
     pub report: Option<Report>,
 }
 
@@ -112,6 +115,7 @@ pub fn match_detail(
     account_id: i64,
     match_id: &str,
     baseline_games: u32,
+    session_gap_min: u32,
 ) -> Result<MatchDetail, CoachError> {
     let l = load(conn, account_id, match_id)?;
     let me = l.subject()?;
@@ -131,6 +135,11 @@ pub fn match_detail(
         Some(tl) => (Some(series(tl)), map_events(&l.game, tl), deaths_of(&l.game, tl, me)),
         None => (None, vec![], vec![]),
     };
+    let patterns = if rift {
+        match_patterns(conn, account_id, match_id, l.summary.game_start_ms, baseline_games, session_gap_min)?
+    } else {
+        vec![]
+    };
     Ok(MatchDetail {
         queue_name: queue_name(l.summary.queue_id),
         is_standard_rift: rift,
@@ -141,6 +150,7 @@ pub fn match_detail(
         series,
         events,
         deaths,
+        patterns,
         report: reports::latest_for_match(conn, POST_GAME, account_id, match_id)?,
         summary: l.summary,
     })

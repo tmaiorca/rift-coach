@@ -53,6 +53,18 @@ enum Command {
         #[arg(long)]
         facts: bool,
     },
+    /// Compute any missing metrics, then print recurring patterns and which
+    /// metrics move your win rate over your newest games.
+    Patterns {
+        #[arg(long, default_value_t = 30)]
+        games: u32,
+        /// Only one role (TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY).
+        #[arg(long)]
+        role: Option<String>,
+        /// Also list sessions.
+        #[arg(long)]
+        sessions: bool,
+    },
     /// Save raw API responses to a gitignored folder for building fixtures.
     RecordFixtures {
         riot_id: RiotId,
@@ -103,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
                 Command::Status => status(&engine, &paths).await,
                 Command::Smoke { riot_id, platform } => smoke(&engine, &riot_id, platform).await,
                 Command::Analyze { match_id, games, facts } => analyze(&engine, match_id, games, facts).await,
+                Command::Patterns { games, role, sessions } => patterns(&engine, games, role, sessions).await,
                 Command::RecordFixtures { riot_id, platform, matches, out } => {
                     fixtures::record(engine.riot(), &riot_id, platform, matches, &out).await
                 }
@@ -147,14 +160,20 @@ async fn analyze(engine: &Arc<Engine>, match_id: Option<String>, games: u32, fac
                     .map(|g| g.match_id.clone())
                     .ok_or_else(|| rc_store::StoreError::Io(std::io::Error::other("no Rift games stored")))?,
             };
-            Ok((account.id, rc_coach::detail::match_detail(c, account.id, &id, games)))
+            let gap = rc_store::settings::app(c)?.session_gap_min;
+            Ok((account.id, rc_coach::detail::match_detail(c, account.id, &id, games, gap)))
         })
         .await?;
     let (account_id, detail) = (detail.0, detail.1?);
     if facts {
         let items = engine.item_catalog(&detail.summary.patch).await.ok();
+        let settings = engine.db().call(|c| rc_store::settings::app(c)).await?;
+        let opts = rc_coach::review::ReviewOptions {
+            baseline_games: games,
+            ..rc_coach::review::ReviewOptions::from_settings(&settings, false)
+        };
         let f =
-            rc_coach::review::post_game_facts(engine.db(), account_id, &detail.summary.match_id, games, items).await?;
+            rc_coach::review::post_game_facts(engine.db(), account_id, &detail.summary.match_id, &opts, items).await?;
         let text = serde_json::to_string_pretty(&f)?;
         println!("{text}");
         eprintln!("{} chars (~{} tokens)", text.len(), text.len() / 4);
@@ -185,6 +204,57 @@ async fn analyze(engine: &Arc<Engine>, match_id: Option<String>, games: u32, fac
             "  {:>5.0}s enemies={} pre14={} enemy_half={} gold_vs_opp={:?}",
             d.t_s, d.enemies_involved, d.before_14, d.in_enemy_half, d.gold_vs_opponent
         );
+    }
+    Ok(())
+}
+
+async fn patterns(engine: &Arc<Engine>, games: u32, role: Option<String>, sessions: bool) -> anyhow::Result<()> {
+    engine.start().await?;
+    if let IdleOutcome::KeyProblem(k) = engine.wait_idle().await? {
+        println!("(work paused: key {k:?}; analyzing what's stored)");
+    }
+    let (view, list) = engine
+        .db()
+        .call(move |c| {
+            let account = rc_store::accounts::primary_account(c)?
+                .ok_or_else(|| rc_store::StoreError::Io(std::io::Error::other("no account tracked yet")))?;
+            let gap = rc_store::settings::app(c)?.session_gap_min;
+            let view = rc_coach::patterns::patterns(c, account.id, games, role.as_deref(), gap)?;
+            let list = if sessions { rc_coach::sessions::list(c, account.id, gap, 15)? } else { vec![] };
+            Ok((view, list))
+        })
+        .await?;
+    println!("{} games, {} wins. Roles: {:?}", view.games, view.wins, view.roles);
+    println!("\nSignals (strongest first):");
+    for s in &view.signals {
+        println!("  [{:?}/{:?} score {:.2}] {} ({}): {}", s.polarity, s.severity, s.score, s.title, s.id, s.detail);
+        for e in s.evidence.iter().take(3) {
+            let t = e.t_s.map(|t| format!("{}:{:02} ", t as i64 / 60, t as i64 % 60)).unwrap_or_default();
+            println!("      {} {t}{}", e.match_id, e.note);
+        }
+        if let Some(g) = &s.goal {
+            println!("      goal: {} {} {}", g.metric, g.comparator.as_str(), g.target);
+        }
+    }
+    println!("\nWin links:");
+    for l in view.win_links.iter().take(15) {
+        println!(
+            "  {:<30} {:?} early={} higher-in-wins {}% p={:.3} wr above/below {:?}/{:?}  {}",
+            l.label,
+            l.strength,
+            l.early,
+            l.higher_in_wins_pct,
+            l.p_value,
+            l.win_rate_above,
+            l.win_rate_below,
+            l.summary
+        );
+    }
+    if sessions {
+        println!("\nSessions (newest first):");
+        for s in &list {
+            println!("  {} games={} rift={} {}W {}L", s.scope, s.games, s.rift_games, s.wins, s.losses);
+        }
     }
     Ok(())
 }

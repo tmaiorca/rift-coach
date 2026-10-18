@@ -320,7 +320,13 @@ async fn ingests_recorded_fixtures() {
         .iter()
         .find(|id| db.with(|c| Ok(rc_store::matches::account_match(c, me, id)?.expect("row").0.deaths > 0)).expect("q"))
         .expect("a game with deaths");
-    let opts = rc_coach::review::ReviewOptions { baseline_games: 30, max_tokens: 2000, force: false };
+    let opts = rc_coach::review::ReviewOptions {
+        baseline_games: 30,
+        session_gap_min: 60,
+        max_tokens: 2000,
+        monthly_token_limit: None,
+        force: false,
+    };
     let report = rc_coach::review::post_game_review(&db, &client, me, target, &opts, None).await.expect("review");
     assert_eq!(report.validation, "ok", "{:?}", report.notes);
     assert_eq!(report.output_tokens, Some(310));
@@ -334,6 +340,88 @@ async fn ingests_recorded_fixtures() {
     let again = rc_coach::review::post_game_review(&db, &client, me, target, &opts, None).await.expect("cached");
     assert_eq!(again.id, report.id);
     assert_eq!(ai.received_requests().await.unwrap_or_default().len(), 2);
+
+    // Death events are stored for every death of every player.
+    let (summary, pid) = db.with(|c| Ok(rc_store::matches::account_match(c, me, target)?.expect("row"))).expect("q");
+    let deaths = db.with(|c| rc_store::metrics::participant_deaths(c, target, pid)).expect("q");
+    assert_eq!(deaths.len() as i32, summary.deaths);
+
+    // A goal started before these games counts all three, and completes.
+    db.with(|c| {
+        rc_store::goals::insert(
+            c,
+            &rc_store::goals::NewGoal {
+                account_id: me,
+                metric: "deaths_pre14",
+                comparator: "at_most",
+                target: 1.0,
+                games: 3,
+                role: None,
+                champion_name: None,
+                baseline: Some(2.0),
+                source: "user",
+                note: None,
+            },
+            Some(0),
+        )
+    })
+    .expect("goal");
+    let goals = db.with(|c| Ok(rc_coach::goals::list(c, me, true))).expect("q").expect("goals");
+    assert_eq!(goals.len(), 1);
+    assert_eq!(goals[0].progress.games_played, 3);
+    assert_eq!(goals[0].goal.status, "completed", "all games played");
+    assert!(goals[0].goal.achieved.is_some());
+    // Completed goals don't show among active ones.
+    assert!(db.with(|c| Ok(rc_coach::goals::list(c, me, false))).expect("q").expect("goals").is_empty());
+
+    // The three recorded games are one session.
+    let sessions = db.with(|c| rc_coach::sessions::list(c, me, 60, 10)).expect("sessions");
+    assert_eq!(sessions.len(), 1);
+    let scope = sessions[0].scope.clone();
+    assert_eq!((sessions[0].games, sessions[0].rift_games), (3, 3));
+    let detail = db.with(|c| Ok(rc_coach::sessions::detail(c, me, &scope, 60, 30))).expect("q").expect("detail");
+    assert_eq!(detail.games.len(), 3);
+    assert!(detail.aggregates.iter().any(|a| a.metric == "deaths_pre14"));
+
+    // Session review against a mock provider.
+    let ai2 = MockServer::start().await;
+    let session_report = json!({
+        "summary": "A tough session where laning deaths kept showing up.",
+        "went_well": [{"title": "Warding", "detail": "Your vision held up across the session.", "evidence": ["vision_pm"]}],
+        "improve": [{"title": "Laning deaths", "detail": "Early deaths repeated from game to game.", "evidence": ["deaths_pre14", "game_1"]}],
+        "priority_fixes": [{"title": "Stop after two losses", "why": "Results dropped as the session went on.", "how": "Take a break after two losses in a row.", "evidence": ["session"]}],
+        "next_game_focus": {"goal": "At most 1 death before 14:00 per game", "metric": "deaths_pre14", "comparator": "at_most", "target": 1},
+        "confidence": "low",
+        "confidence_reason": "Only a few games."
+    });
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "content": [{"type": "text", "text": session_report.to_string()}],
+            "usage": {"input_tokens": 2000, "output_tokens": 400}
+        })))
+        .mount(&ai2)
+        .await;
+    let client2 = rc_ai::AiClient::new(
+        rc_ai::ProviderConfig { kind: rc_ai::ProviderKind::Anthropic, model: "m".into(), base_url: Some(ai2.uri()) },
+        Some(Secret::new("sk-test")),
+    )
+    .expect("ai");
+    let r = rc_coach::review::session_review(&db, &client2, me, &scope, &opts).await.expect("session review");
+    assert_eq!(r.kind, "session");
+    assert_eq!(r.scope.as_deref(), Some(scope.as_str()));
+    assert_eq!(r.validation, "ok", "{:?}", r.notes);
+    let body = String::from_utf8_lossy(&ai2.received_requests().await.unwrap_or_default()[0].body).to_string();
+    assert!(body.contains("game_3") && body.contains("aggregates"), "session facts sent");
+    assert!(!body.contains("Player0"), "no other players' identities");
+    let cached = rc_coach::review::session_review(&db, &client2, me, &scope, &opts).await.expect("cached");
+    assert_eq!(cached.id, r.id);
+
+    // The token cap blocks new reports once reached (2,710 tokens used so far).
+    let capped = rc_coach::review::ReviewOptions { monthly_token_limit: Some(1000), force: true, ..opts.clone() };
+    let err = rc_coach::review::session_review(&db, &client2, me, &scope, &capped).await.expect_err("capped");
+    assert!(matches!(err, rc_coach::CoachError::Budget(_)), "{err}");
+    assert_eq!(ai2.received_requests().await.unwrap_or_default().len(), 1, "no call once capped");
 }
 
 #[tokio::test]

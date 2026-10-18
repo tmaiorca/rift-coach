@@ -16,6 +16,8 @@ use crate::job::Job;
 const MATCH_PAGE: u32 = 100;
 /// Auto reviews only cover games that ended this recently.
 const AUTO_REVIEW_MAX_AGE_MS: i64 = 6 * 3600 * 1000;
+/// Auto session reviews only cover sessions that ended this recently.
+const AUTO_SESSION_MAX_AGE_MS: i64 = 24 * 3600 * 1000;
 
 #[derive(Debug)]
 pub(crate) enum JobError {
@@ -64,6 +66,7 @@ impl Engine {
             Job::DdragonSync { patch } => self.ddragon_sync(patch).await,
             Job::ComputeMetrics { match_id } => self.compute_metrics(match_id).await,
             Job::AiReview { account_id, match_id } => self.ai_review(*account_id, match_id).await,
+            Job::SessionReview { account_id, scope } => self.session_review(*account_id, scope).await,
         }
     }
 
@@ -274,8 +277,11 @@ impl Engine {
             }
         };
         let metrics = rc_metrics::compute(&game, timeline.as_ref(), &items);
+        let deaths = timeline.as_ref().map(|tl| death_rows(&game, tl)).unwrap_or_default();
         let id = match_id.to_owned();
-        self.db.call(move |c| rc_store::metrics::save_match_metrics(c, &id, version, &metrics.by_participant)).await?;
+        self.db
+            .call(move |c| rc_store::metrics::save_match_metrics(c, &id, version, &metrics.by_participant, &deaths))
+            .await?;
         self.emit(EngineEvent::MetricsComputed { match_id: match_id.to_owned() });
         if timeline.is_some() {
             self.maybe_queue_auto_review(match_id).await?;
@@ -322,19 +328,59 @@ impl Engine {
         let id = match_id.to_owned();
         let patch = self.db.call(move |c| matches::patch_of_match(c, &id)).await?.unwrap_or_default();
         let items = self.item_catalog(&patch).await.ok();
-        let opts = rc_coach::review::ReviewOptions {
-            baseline_games: settings.baseline_games,
-            max_tokens: settings.ai.max_tokens,
-            force: false,
-        };
+        let opts = rc_coach::review::ReviewOptions::from_settings(&settings, false);
         match rc_coach::review::post_game_review(&self.db, &client, account_id, match_id, &opts, items).await {
             Ok(report) => {
                 self.emit(EngineEvent::ReviewReady { match_id: match_id.to_owned(), report_id: report.id });
                 Ok(())
             }
-            Err(rc_coach::CoachError::Ai(e)) if e.is_transient() => Err(JobError::Retry(e.to_string())),
-            Err(e) => Err(JobError::Permanent(e.to_string())),
+            Err(e) => Err(review_error(e)),
         }
+    }
+
+    async fn session_review(&self, account_id: i64, scope: &str) -> JobResult {
+        let settings = self.db.call(|c| rc_store::settings::app(c)).await?;
+        let client =
+            rc_coach::provider::client_from_settings(&settings.ai).map_err(|e| JobError::Permanent(e.to_string()))?;
+        let opts = rc_coach::review::ReviewOptions::from_settings(&settings, false);
+        match rc_coach::review::session_review(&self.db, &client, account_id, scope, &opts).await {
+            Ok(report) => {
+                self.emit(EngineEvent::SessionReviewReady { scope: scope.to_owned(), report_id: report.id });
+                Ok(())
+            }
+            Err(e) => Err(review_error(e)),
+        }
+    }
+
+    /// Queues a review of the active account's latest session once it has
+    /// ended, if the setting is on. Only sessions that ended in the last day
+    /// and had at least 2 Summoner's Rift games.
+    pub(crate) async fn maybe_queue_session_review(&self) -> JobResult {
+        let target = self
+            .db
+            .call(|c| {
+                let s = rc_store::settings::app(c)?;
+                if !s.ai.auto_session {
+                    return Ok(None);
+                }
+                let account = match s.active_account_id {
+                    Some(a) => accounts::get_account(c, a)?,
+                    None => accounts::primary_account(c)?,
+                };
+                let Some(account) = account else { return Ok(None) };
+                let now = rc_common::time::now_ms();
+                let Some(session) = rc_coach::sessions::latest_ended(c, account.id, s.session_gap_min, now)? else {
+                    return Ok(None);
+                };
+                let eligible =
+                    session.rift_games >= 2 && !session.has_report && now - session.end_ms < AUTO_SESSION_MAX_AGE_MS;
+                Ok(eligible.then_some((account.id, session.scope)))
+            })
+            .await?;
+        if let Some((account_id, scope)) = target {
+            self.enqueue(Job::SessionReview { account_id, scope }).await?;
+        }
+        Ok(())
     }
 
     async fn ddragon_sync(&self, patch: &str) -> JobResult {
@@ -342,6 +388,43 @@ impl Engine {
         self.ddragon.ensure_version(&version).await?;
         Ok(())
     }
+}
+
+fn review_error(e: rc_coach::CoachError) -> JobError {
+    match e {
+        rc_coach::CoachError::Ai(e) if e.is_transient() => JobError::Retry(e.to_string()),
+        e => JobError::Permanent(e.to_string()),
+    }
+}
+
+/// Every champion death in the match (all ten players) for `death_events`.
+fn death_rows(game: &rc_metrics::model::Match, tl: &rc_metrics::model::Timeline) -> Vec<rc_store::metrics::DeathRow> {
+    let champ = |pid: Option<i32>| {
+        pid.and_then(|id| game.info.participants.iter().find(|p| p.participant_id == id))
+            .map(|p| p.champion_name.clone())
+    };
+    game.info
+        .participants
+        .iter()
+        .flat_map(|p| {
+            rc_metrics::detail::deaths_of(game, tl, p).into_iter().map(|d| rc_store::metrics::DeathRow {
+                participant_id: p.participant_id,
+                t_ms: (d.t_s * 1000.0).round() as i64,
+                x: d.x,
+                y: d.y,
+                zone: d.zone.as_str().to_owned(),
+                enemies: i32::try_from(d.enemies_involved).unwrap_or(i32::MAX),
+                solo: d.solo,
+                before_14: d.before_14,
+                enemy_side: d.in_enemy_half,
+                gold_vs_opponent: d.gold_vs_opponent,
+                unspent_gold: d.unspent_gold,
+                shutdown_bounty: d.shutdown_bounty,
+                enemy_objective: d.enemy_objective.map(str::to_owned),
+                killer_champion: champ(d.killer_id.filter(|k| (1..=10).contains(k))),
+            })
+        })
+        .collect()
 }
 
 fn non_empty(s: &str) -> Option<String> {

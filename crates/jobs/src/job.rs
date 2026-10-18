@@ -35,6 +35,12 @@ pub enum Job {
         account_id: i64,
         match_id: String,
     },
+    /// Automatic AI review of a finished play session (`scope` from
+    /// `rc_coach::sessions::scope_of`).
+    SessionReview {
+        account_id: i64,
+        scope: String,
+    },
 }
 
 impl Job {
@@ -47,6 +53,7 @@ impl Job {
             Self::DdragonSync { .. } => "ddragon_sync",
             Self::ComputeMetrics { .. } => "compute_metrics",
             Self::AiReview { .. } => "ai_review",
+            Self::SessionReview { .. } => "session_review",
         }
     }
 
@@ -60,6 +67,7 @@ impl Job {
             Self::DdragonSync { patch } => format!("ddragon:{patch}"),
             Self::ComputeMetrics { match_id } => format!("metrics:{match_id}"),
             Self::AiReview { account_id, match_id } => format!("review:{account_id}:{match_id}"),
+            Self::SessionReview { account_id, scope } => format!("session_review:{account_id}:{scope}"),
         }
     }
 
@@ -74,7 +82,7 @@ impl Job {
             Self::ComputeMetrics { .. } => 70,
             Self::FetchMatch { .. } => 50,
             Self::FetchTimeline { .. } => 40,
-            Self::AiReview { .. } => 20,
+            Self::AiReview { .. } | Self::SessionReview { .. } => 20,
         }
     }
 
@@ -82,7 +90,7 @@ impl Job {
         match self {
             // A just-finished match can take several minutes to appear.
             Self::FetchMatch { .. } | Self::FetchTimeline { .. } => 8,
-            Self::AiReview { .. } => 3,
+            Self::AiReview { .. } | Self::SessionReview { .. } => 3,
             _ => 5,
         }
     }
@@ -97,6 +105,7 @@ impl Job {
             Self::DdragonSync { patch } => format!("Data Dragon {patch}"),
             Self::ComputeMetrics { match_id } => format!("metrics {match_id}"),
             Self::AiReview { match_id, .. } => format!("AI review {match_id}"),
+            Self::SessionReview { .. } => "AI session review".to_owned(),
         }
     }
 

@@ -14,15 +14,36 @@ fn rift_filter() -> String {
     format!("m.map_id = {SUMMONERS_RIFT_MAP} AND m.queue_id IN ({queues}) AND m.is_remake = 0")
 }
 
-/// Replaces a match's metrics with `by_participant` and records `version`.
+/// One champion death with its context (see `death_events` in migration 003).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct DeathRow {
+    pub participant_id: i32,
+    pub t_ms: i64,
+    pub x: i32,
+    pub y: i32,
+    pub zone: String,
+    pub enemies: i32,
+    pub solo: bool,
+    pub before_14: bool,
+    pub enemy_side: bool,
+    pub gold_vs_opponent: Option<i32>,
+    pub unspent_gold: Option<i32>,
+    pub shutdown_bounty: i32,
+    pub enemy_objective: Option<String>,
+    pub killer_champion: Option<String>,
+}
+
+/// Replaces a match's metrics and death events and records `version`.
 pub fn save_match_metrics(
     conn: &mut Connection,
     match_id: &str,
     version: i64,
     by_participant: &BTreeMap<i32, BTreeMap<String, f64>>,
+    deaths: &[DeathRow],
 ) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM participant_metrics WHERE match_id = ?1", [match_id])?;
+    tx.execute("DELETE FROM death_events WHERE match_id = ?1", [match_id])?;
     {
         let mut stmt = tx.prepare(
             "INSERT INTO participant_metrics (match_id, participant_id, metric, value) VALUES (?1, ?2, ?3, ?4)",
@@ -31,6 +52,35 @@ pub fn save_match_metrics(
             for (k, v) in metrics {
                 stmt.execute(params![match_id, pid, k, v])?;
             }
+        }
+        let mut stmt = tx.prepare(
+            "INSERT INTO death_events (match_id, participant_id, seq, t_ms, x, y, zone, enemies, solo, before_14,
+                                       enemy_side, gold_vs_opponent, unspent_gold, shutdown_bounty, enemy_objective,
+                                       killer_champion)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        )?;
+        let mut seq: BTreeMap<i32, i32> = BTreeMap::new();
+        for d in deaths {
+            let n = seq.entry(d.participant_id).or_default();
+            *n += 1;
+            stmt.execute(params![
+                match_id,
+                d.participant_id,
+                *n,
+                d.t_ms,
+                d.x,
+                d.y,
+                d.zone,
+                d.enemies,
+                d.solo,
+                d.before_14,
+                d.enemy_side,
+                d.gold_vs_opponent,
+                d.unspent_gold,
+                d.shutdown_bounty,
+                d.enemy_objective,
+                d.killer_champion
+            ])?;
         }
     }
     tx.execute(
@@ -63,6 +113,56 @@ pub fn participant_metrics(conn: &Connection, match_id: &str, participant_id: i3
     let rows = stmt
         .query_map(params![match_id, participant_id], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+pub fn participant_deaths(conn: &Connection, match_id: &str, participant_id: i32) -> Result<Vec<DeathRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT participant_id, t_ms, x, y, zone, enemies, solo, before_14, enemy_side, gold_vs_opponent,
+                unspent_gold, shutdown_bounty, enemy_objective, killer_champion
+           FROM death_events WHERE match_id = ?1 AND participant_id = ?2 ORDER BY seq",
+    )?;
+    let rows = stmt
+        .query_map(params![match_id, participant_id], |r| {
+            Ok(DeathRow {
+                participant_id: r.get(0)?,
+                t_ms: r.get(1)?,
+                x: r.get(2)?,
+                y: r.get(3)?,
+                zone: r.get(4)?,
+                enemies: r.get(5)?,
+                solo: r.get(6)?,
+                before_14: r.get(7)?,
+                enemy_side: r.get(8)?,
+                gold_vs_opponent: r.get(9)?,
+                unspent_gold: r.get(10)?,
+                shutdown_bounty: r.get(11)?,
+                enemy_objective: r.get(12)?,
+                killer_champion: r.get(13)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+/// Where other players in `role` die in the account's stored games:
+/// zone → deaths (the account's own rows excluded).
+pub fn role_death_zones(conn: &Connection, account_id: i64, role: &str) -> Result<BTreeMap<String, u32>> {
+    let sql = format!(
+        "SELECT d.zone, COUNT(*)
+           FROM death_events d
+           JOIN match_participants p ON p.match_id = d.match_id AND p.participant_id = d.participant_id
+           JOIN matches m ON m.match_id = d.match_id
+          WHERE {} AND p.team_position = ?2
+            AND NOT EXISTS (SELECT 1 FROM account_matches am
+                             WHERE am.account_id = ?1 AND am.match_id = p.match_id
+                               AND am.participant_id = p.participant_id)
+          GROUP BY d.zone",
+        rift_filter()
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows =
+        stmt.query_map(params![account_id, role], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
     Ok(rows)
 }
 
@@ -132,7 +232,9 @@ fn collect(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Result<Pop
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GameMetrics {
     pub match_id: String,
+    pub participant_id: i32,
     pub game_start_ms: i64,
+    pub duration_s: i64,
     pub champion_name: String,
     pub champion_id: i32,
     pub team_position: Option<String>,
@@ -140,38 +242,58 @@ pub struct GameMetrics {
     pub metrics: BTreeMap<String, f64>,
 }
 
+/// Which of the account's Summoner's Rift games to load.
+#[derive(Debug, Clone, Default)]
+pub struct GameFilter {
+    /// Newest N games (after the other filters).
+    pub limit: u32,
+    /// Only games that started at or after this time.
+    pub since_ms: Option<i64>,
+    /// Only games that started before this time.
+    pub before_ms: Option<i64>,
+    pub role: Option<String>,
+    pub champion_name: Option<String>,
+}
+
 /// The account's newest `games` Summoner's Rift games with metrics.
 pub fn recent_game_metrics(conn: &Connection, account_id: i64, games: u32) -> Result<Vec<GameMetrics>> {
+    game_metrics(conn, account_id, &GameFilter { limit: games, ..Default::default() })
+}
+
+/// The account's Summoner's Rift games matching `f`, newest first.
+pub fn game_metrics(conn: &Connection, account_id: i64, f: &GameFilter) -> Result<Vec<GameMetrics>> {
     let sql = format!(
-        "SELECT m.match_id, m.game_start_ms, p.champion_name, p.champion_id, p.team_position, p.win, p.participant_id
+        "SELECT m.match_id, m.game_start_ms, m.duration_s, p.champion_name, p.champion_id, p.team_position, p.win,
+                p.participant_id
            FROM account_matches am
            JOIN matches m ON m.match_id = am.match_id
            JOIN match_participants p ON p.match_id = am.match_id AND p.participant_id = am.participant_id
           WHERE am.account_id = ?1 AND {}
+            AND (?3 IS NULL OR m.game_start_ms >= ?3) AND (?4 IS NULL OR m.game_start_ms < ?4)
+            AND (?5 IS NULL OR p.team_position = ?5) AND (?6 IS NULL OR p.champion_name = ?6)
           ORDER BY m.game_start_ms DESC
           LIMIT ?2",
         rift_filter()
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows: Vec<(GameMetrics, i32)> = stmt
-        .query_map(params![account_id, games], |r| {
-            Ok((
-                GameMetrics {
-                    match_id: r.get(0)?,
-                    game_start_ms: r.get(1)?,
-                    champion_name: r.get(2)?,
-                    champion_id: r.get(3)?,
-                    team_position: r.get(4)?,
-                    win: r.get(5)?,
-                    metrics: BTreeMap::new(),
-                },
-                r.get(6)?,
-            ))
+    let rows: Vec<GameMetrics> = stmt
+        .query_map(params![account_id, f.limit, f.since_ms, f.before_ms, f.role, f.champion_name], |r| {
+            Ok(GameMetrics {
+                match_id: r.get(0)?,
+                game_start_ms: r.get(1)?,
+                duration_s: r.get(2)?,
+                champion_name: r.get(3)?,
+                champion_id: r.get(4)?,
+                team_position: r.get(5)?,
+                win: r.get(6)?,
+                participant_id: r.get(7)?,
+                metrics: BTreeMap::new(),
+            })
         })?
         .collect::<rusqlite::Result<_>>()?;
     rows.into_iter()
-        .map(|(mut g, pid)| {
-            g.metrics = participant_metrics(conn, &g.match_id, pid)?;
+        .map(|mut g| {
+            g.metrics = participant_metrics(conn, &g.match_id, g.participant_id)?;
             Ok(g)
         })
         .collect()
@@ -234,7 +356,23 @@ mod tests {
                 let metrics: BTreeMap<i32, BTreeMap<String, f64>> = (1..=10)
                     .map(|n| (n, BTreeMap::from([("cs_10".to_string(), f64::from(n * 10 + i as i32))])))
                     .collect();
-                save_match_metrics(c, id, 1, &metrics)?;
+                let deaths = vec![DeathRow {
+                    participant_id: 8,
+                    t_ms: 60_000,
+                    x: 100,
+                    y: 100,
+                    zone: "own_base".into(),
+                    enemies: 1,
+                    solo: true,
+                    before_14: true,
+                    enemy_side: false,
+                    gold_vs_opponent: Some(-5),
+                    unspent_gold: None,
+                    shutdown_bounty: 0,
+                    enemy_objective: None,
+                    killer_champion: Some("Leblanc".into()),
+                }];
+                save_match_metrics(c, id, 1, &metrics, &deaths)?;
             }
             assert!(stale_matches(c, 1)?.is_empty());
             assert_eq!(stale_matches(c, 2)?.len(), 2);
@@ -251,6 +389,14 @@ mod tests {
             let recent = recent_game_metrics(c, me, 10)?;
             assert_eq!(recent.len(), 2);
             assert_eq!(recent[0].metrics["cs_10"], 31.0);
+            let older = game_metrics(c, me, &GameFilter { limit: 10, before_ms: Some(2000), ..Default::default() })?;
+            assert_eq!(older.len(), 1);
+            assert_eq!(older[0].match_id, "NA1_1");
+
+            // The enemy mid's deaths form the role's death-zone population.
+            assert_eq!(role_death_zones(c, me, "MIDDLE")?, BTreeMap::from([("own_base".to_string(), 2)]));
+            assert_eq!(participant_deaths(c, "NA1_1", 8)?.len(), 1);
+            assert!(participant_deaths(c, "NA1_1", 3)?.is_empty());
             Ok(())
         })
         .expect("ok");

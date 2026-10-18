@@ -12,9 +12,10 @@ as `engine-event` events.
 UI (React)  --invoke-->  commands.rs  -->  Engine (rc-jobs)
                              |               |-- RiotClient --> RateLimiter --> Riot Web API
                              |               |-- DdragonCache --> Data Dragon CDN (+ disk cache)
-                             |               |-- rc-metrics (pure) --> participant_metrics
+                             |               |-- rc-metrics (pure) --> participant_metrics, death_events
                              |               '-- Db (rc-store, SQLite WAL)
-                             '--> rc-coach --> rc-ai --> Anthropic / OpenAI / Gemini / OpenAI-compatible
+                             '--> rc-coach --+--> rc-signals (pure): patterns, win links, sessions, goal progress
+                                             '--> rc-ai --> Anthropic / OpenAI / Gemini / OpenAI-compatible
 ```
 
 `rc-cli` builds the identical engine (`rc_jobs::build_engine`) for headless use.
@@ -74,16 +75,59 @@ Comparisons (`rc-coach::analysis`) use two populations:
 `zero_sum` metrics (lane diffs) skip the role population, since opponents'
 values mirror the player's. Higher-rank benchmarks are Phase 5.
 
+Alongside the metrics, every champion death of every player is stored in
+`death_events` (time, position, map zone relative to the victim's team,
+enemies involved, solo, laning phase, enemy side, gold vs lane opponent,
+unspent gold, shutdown, epic monster the enemy took within 60 s, killer
+champion). Zones (`rc_metrics::zones`) are straight-line bands over the map.
+
+## Signals (patterns), win links, goals, sessions
+
+`rc-signals` is pure and unit-tested; `rc-coach::patterns` loads its input
+(the account's games with metrics and deaths, plus per-role populations of
+metrics and death zones from the other players in the account's games).
+
+- *Rule detectors* (`rules.rs`): a per-game test plus thresholds (min share of
+  considered games, ≥ 5 considered, ≥ 3 affected). The same tests produce
+  per-game flags (match screen, session games, AI facts).
+- *Cross-game detectors* (`cross.rs`): median per-game percentile vs the role
+  population (≤ 30 weakness, ≥ 70 strength, ≥ 8 games, population ≥ 20;
+  metrics a rule already covers are skipped); death zones vs the role's zone
+  distribution weighted per death; session effects (after a loss, 4th+ game).
+- Every signal carries counts, win rate affected vs not, evidence (match,
+  time, position), and an optional goal suggestion. Score = strength ×
+  √affected × (1 + win-rate gap / 50).
+- *Win links* (`correlation.rs`): Mann-Whitney U (AUC + tie-corrected normal
+  p-value) of each metric in wins vs losses, ≥ 12 games and ≥ 4 of each;
+  early metrics (≤ 15:00) are flagged because late ones mostly reflect the
+  result.
+- *Sessions*: consecutive games with gaps ≤ `session_gap_min`; a session's id
+  and AI report scope is `session:<first match id>:<game count>`.
+- *Goals* (`goals` table): metric, comparator, target, N games, optional
+  role/champion, baseline at creation. Progress counts the Rift games started
+  after `created_at`; a goal auto-completes (achieved = average meets target)
+  when N games are played.
+
+The engine checks every 10 minutes (and at start) whether the active
+account's latest session has ended and queues `SessionReview` if
+`ai.auto_session` is on.
+
 ## AI reviews
 
 `rc-coach::review` builds a facts object (`facts.rs`), sends it with the
-versioned prompt (`prompts/post_game_review.v1.md`) via `rc-ai`, and validates
+versioned prompt (`prompts/post_game_review.v2.md`, `prompts/session_review.v1.md`)
+via `rc-ai`, and validates
 the reply (`validate.rs`): structure, evidence ids, and every number and
 mm:ss time in the prose must trace to the facts (the next-game goal may set a
 new target). A structural failure retries once with feedback; untraceable
 numbers after the retry store the report as `unverified`. Reports live in
-`ai_reports` (history kept); the newest one for the same prompt version,
-provider and model is reused unless the user regenerates.
+`ai_reports` (history kept, keyed by match or by `scope` for sessions); the
+newest one for the same prompt version, provider and model is reused unless the
+user regenerates. Post-game facts include this game's pattern flags (with
+recurrence) and active goals; session facts include each game, session
+averages vs the prior baseline, session patterns vs their usual rate, and
+goals. Before any call, tokens used in the last 30 days are checked against
+`ai.monthly_token_limit` (`CoachError::Budget`).
 
 Providers: Anthropic Messages API, OpenAI Chat Completions (JSON mode),
 Gemini `generateContent` (JSON MIME type), and OpenAI-compatible servers

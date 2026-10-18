@@ -3,12 +3,16 @@ import { api } from "../api";
 import { dateTime } from "../lib/format";
 import type { Report } from "../types";
 
+const KIND: Record<string, string> = { post_game: "game", session: "session" };
+
 export function Reports({
   refreshKey,
   onOpenMatch,
+  onOpenSession,
 }: {
   refreshKey: number;
   onOpenMatch: (id: string) => void;
+  onOpenSession: (scope: string) => void;
 }) {
   const [reports, setReports] = useState<Report[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,13 +38,16 @@ export function Reports({
         </p>
         {error && <div className="banner error">{error}</div>}
         {reports?.length === 0 && (
-          <p className="muted">No reviews yet. Open a match and click "Review this game".</p>
+          <p className="muted">
+            No reviews yet. Open a match and click "Review this game", or review a session on the Sessions
+            page.
+          </p>
         )}
         {reports?.map((r) => (
           <details key={r.id} className="report-row">
             <summary>
               <span className="mono">{dateTime(r.created_at)}</span>
-              <span className="tag">{r.kind.replace("_", "-")}</span>
+              <span className="tag">{KIND[r.kind] ?? r.kind}</span>
               {r.validation !== "ok" && <span className="tag warn">unverified numbers</span>}
               <span className="report-summary">{r.output?.summary}</span>
               <span className="muted small-text">{r.model}</span>
@@ -66,6 +73,11 @@ export function Reports({
               {r.match_id && (
                 <button className="secondary small" onClick={() => onOpenMatch(r.match_id!)}>
                   Open match
+                </button>
+              )}
+              {r.scope && r.kind === "session" && (
+                <button className="secondary small" onClick={() => onOpenSession(r.scope!)}>
+                  Open session
                 </button>
               )}
             </div>

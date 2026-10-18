@@ -1408,3 +1408,336 @@ table.scoreboard tr.me td {
   white-space: normal;
   position: static;
 }
+
+/* ---------- Phase 3: patterns, goals, sessions ---------- */
+
+.good {
+  color: var(--win);
+}
+
+.bad {
+  color: var(--loss);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.grid-2.even {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.grid-2 .grid-2.even {
+  gap: 18px;
+}
+
+.signal {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.signal p {
+  margin: 6px 0;
+}
+
+.signal.weak {
+  border-left-color: rgba(217, 96, 90, 0.7);
+}
+
+.signal.weak.sev-high {
+  border-left-color: var(--loss);
+}
+
+.signal.weak.sev-low {
+  border-left-color: rgba(224, 168, 74, 0.6);
+}
+
+.signal.strong {
+  border-left-color: rgba(79, 176, 122, 0.8);
+}
+
+.signal.on {
+  border-color: var(--border-gold);
+  background: rgba(214, 172, 82, 0.06);
+}
+
+.signal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
+}
+
+.signal-head .spacer {
+  flex: 1;
+}
+
+.sev-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex: none;
+}
+
+.sev-high .sev-dot {
+  background: var(--loss);
+  box-shadow: 0 0 8px rgba(217, 96, 90, 0.7);
+}
+
+.sev-low .sev-dot {
+  background: var(--muted);
+}
+
+.signal.strong .sev-dot {
+  background: var(--win);
+}
+
+.signal .tip {
+  font-style: italic;
+}
+
+.evidence-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.evidence-list li {
+  margin: 2px 0;
+}
+
+.evidence-list .mono {
+  color: var(--text);
+}
+
+.tag.link-strong {
+  color: var(--accent);
+  border-color: var(--border-gold);
+}
+
+.tag.link-moderate {
+  color: var(--accent-2);
+}
+
+.tag.link-weak {
+  color: var(--muted);
+}
+
+.heat-dot {
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 0.25;
+  cursor: pointer;
+}
+
+.heat-dot.loss {
+  fill: #ff7a6e;
+}
+
+.heat-dot.win {
+  fill: #7ee0a8;
+}
+
+.heat-dot.sel {
+  stroke: #fff;
+  stroke-width: 0.5;
+}
+
+.heat-mark {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 0.45;
+  pointer-events: none;
+}
+
+.toggle.inline {
+  margin: 0;
+  align-items: center;
+}
+
+/* goals */
+
+.goal-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.goal-card.compact {
+  padding: 10px 12px;
+}
+
+.goal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.goal-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 6px;
+}
+
+.goal-bar {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+
+button.goal-pip {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+button.goal-pip.met {
+  background: rgba(79, 176, 122, 0.75);
+  border-color: rgba(79, 176, 122, 0.9);
+}
+
+button.goal-pip.miss {
+  background: rgba(217, 96, 90, 0.7);
+  border-color: rgba(217, 96, 90, 0.9);
+}
+
+button.goal-pip:disabled {
+  opacity: 1;
+}
+
+.goal-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 13px;
+}
+
+.goal-games {
+  margin: 10px 0;
+}
+
+.goal-games button.recent {
+  grid-template-columns: 26px 24px 80px 1fr;
+}
+
+.goal-form .form-row {
+  margin: 8px 0;
+}
+
+input.num-input {
+  width: 80px;
+}
+
+.goal-feedback {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-gold);
+  background: rgba(214, 172, 82, 0.06);
+}
+
+.goal-feedback p {
+  margin: 4px 0 0;
+}
+
+/* sessions */
+
+.sessions-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .sessions-grid,
+  .grid-2.even {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.session-list {
+  max-height: calc(100vh - 140px);
+  overflow: auto;
+}
+
+button.session-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "when score" "icons icons";
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-weight: 500;
+}
+
+button.session-row.on {
+  border-color: var(--border-gold);
+  background: rgba(214, 172, 82, 0.1);
+}
+
+.session-when {
+  grid-area: when;
+  font-size: 12px;
+}
+
+.session-score {
+  grid-area: score;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.session-icons {
+  grid-area: icons;
+  display: flex;
+  gap: 3px;
+}
+
+.streak {
+  display: flex;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.sessions button.recent {
+  grid-template-columns: 26px 30px 56px minmax(80px, 1fr) 60px 70px 46px minmax(0, 2fr);
+}
+
+.sessions button.recent .flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.match-patterns {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
+}
+
+.match-patterns .signal {
+  margin: 0;
+}
