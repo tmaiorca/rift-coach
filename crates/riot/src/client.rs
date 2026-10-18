@@ -7,7 +7,7 @@ use reqwest::header::HeaderValue;
 use tokio::time::Instant;
 use url::Url;
 
-use crate::dto::{AccountDto, ChampionMasteryDto, LeagueEntryDto};
+use crate::dto::{AccountDto, ChampionMasteryDto, LeagueEntryDto, LeagueListDto};
 use crate::error::RiotError;
 use crate::limiter::{LimitScope, RateLimiter};
 use crate::routing::{Platform, Region, RiotId};
@@ -26,6 +26,9 @@ pub enum Endpoint {
     LeagueEntriesByPuuid,
     MasteryTopByPuuid,
     ActiveGameByPuuid,
+    /// Master, Grandmaster and Challenger lists.
+    LeagueApex,
+    LeagueEntriesByTier,
 }
 
 impl Endpoint {
@@ -39,6 +42,8 @@ impl Endpoint {
             Self::LeagueEntriesByPuuid => "league-v4.entries-by-puuid",
             Self::MasteryTopByPuuid => "champion-mastery-v4.top-by-puuid",
             Self::ActiveGameByPuuid => "spectator-v5.active-game",
+            Self::LeagueApex => "league-v4.apex",
+            Self::LeagueEntriesByTier => "league-v4.entries-by-tier",
         }
     }
 }
@@ -284,6 +289,32 @@ impl RiotClient {
     ) -> Result<Vec<ChampionMasteryDto>, RiotError> {
         let segs = ["lol", "champion-mastery", "v4", "champion-masteries", "by-puuid", puuid, "top"];
         self.get_json(platform.as_str(), Endpoint::MasteryTopByPuuid, &segs, &[("count", count.to_string())]).await
+    }
+
+    /// `MASTER`, `GRANDMASTER` or `CHALLENGER` ladder for a queue
+    /// (e.g. `RANKED_SOLO_5x5`).
+    pub async fn league_apex(&self, platform: Platform, tier: &str, queue: &str) -> Result<LeagueListDto, RiotError> {
+        let list = match tier {
+            "MASTER" => "masterleagues",
+            "GRANDMASTER" => "grandmasterleagues",
+            "CHALLENGER" => "challengerleagues",
+            other => return Err(RiotError::Invalid(format!("{other} is not an apex tier"))),
+        };
+        let segs = ["lol", "league", "v4", list, "by-queue", queue];
+        self.get_json(platform.as_str(), Endpoint::LeagueApex, &segs, &[]).await
+    }
+
+    /// One page (about 205 players) of a tier and division, e.g. DIAMOND I.
+    pub async fn league_entries_by_tier(
+        &self,
+        platform: Platform,
+        queue: &str,
+        tier: &str,
+        division: &str,
+        page: u32,
+    ) -> Result<Vec<LeagueEntryDto>, RiotError> {
+        let segs = ["lol", "league", "v4", "entries", queue, tier, division];
+        self.get_json(platform.as_str(), Endpoint::LeagueEntriesByTier, &segs, &[("page", page.to_string())]).await
     }
 
     /// Current game for this player, or `None` if they aren't in one.

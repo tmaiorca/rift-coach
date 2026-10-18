@@ -3313,6 +3313,7 @@ dependencies = [
 name = "rc-coach"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "rc-ai",
  "rc-common",
  "rc-live",

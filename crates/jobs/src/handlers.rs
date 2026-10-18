@@ -18,6 +18,12 @@ const MATCH_PAGE: u32 = 100;
 const AUTO_REVIEW_MAX_AGE_MS: i64 = 6 * 3600 * 1000;
 /// Auto session reviews only cover sessions that ended this recently.
 const AUTO_SESSION_MAX_AGE_MS: i64 = 24 * 3600 * 1000;
+/// Auto weekly reports only cover a week that ended this recently.
+const AUTO_WEEKLY_MAX_AGE_MS: i64 = 3 * 24 * 3600 * 1000;
+/// Weekly reports need this many Summoner's Rift games in the week.
+const WEEKLY_MIN_GAMES: usize = 3;
+/// Ranks older than this are refreshed.
+const RANK_MAX_AGE_MS: i64 = 6 * 3600 * 1000;
 /// A live game is the Match-V5 game that started within this of it (the
 /// live start time is estimated from the game clock).
 const LIVE_MATCH_WINDOW_MS: i64 = 5 * 60 * 1000;
@@ -72,6 +78,52 @@ impl Engine {
             Job::AiReview { account_id, match_id } => self.ai_review(*account_id, match_id).await,
             Job::SessionReview { account_id, scope } => self.session_review(*account_id, scope).await,
             Job::PostGame { account_id, live_game_id } => self.post_game(*account_id, *live_game_id).await,
+            Job::FetchRank { account_id } => self.fetch_rank(*account_id).await,
+            Job::WeeklyReport { account_id, week } => self.weekly_report(*account_id, week).await,
+        }
+    }
+
+    async fn fetch_rank(&self, account_id: i64) -> JobResult {
+        let (account, puuid) = self
+            .db
+            .call(move |c| Ok((accounts::get_account(c, account_id)?, accounts::current_puuid(c, account_id)?)))
+            .await?;
+        let account = account.ok_or_else(|| JobError::Permanent(format!("account {account_id} no longer exists")))?;
+        let Some(puuid) = puuid else {
+            self.enqueue(Job::ResolveAccount { account_id, then_sync: None }).await?;
+            return Err(JobError::Retry("resolving the account first".into()));
+        };
+        let platform: Platform = account.platform.parse().map_err(JobError::Permanent)?;
+        let entries = self.riot.league_entries(platform, &puuid).await?;
+        let now = rc_common::time::now_ms();
+        let ranks: Vec<rc_store::bench::Rank> = entries
+            .into_iter()
+            .filter(|e| matches!(e.queue_type.as_str(), "RANKED_SOLO_5x5" | "RANKED_FLEX_SR"))
+            .map(|e| rc_store::bench::Rank {
+                queue_type: e.queue_type,
+                tier: e.tier,
+                division: e.rank,
+                lp: e.league_points,
+                wins: e.wins,
+                losses: e.losses,
+                fetched_at: now,
+            })
+            .collect();
+        self.db.call(move |c| rc_store::bench::set_ranks(c, account_id, &ranks)).await?;
+        Ok(())
+    }
+
+    async fn weekly_report(&self, account_id: i64, week: &str) -> JobResult {
+        let settings = self.db.call(|c| rc_store::settings::app(c)).await?;
+        let client =
+            rc_coach::provider::client_from_settings(&settings.ai).map_err(|e| JobError::Permanent(e.to_string()))?;
+        let opts = rc_coach::review::ReviewOptions::from_settings(&settings, false);
+        match rc_coach::review::weekly_report(&self.db, &client, account_id, week, &opts).await {
+            Ok(report) => {
+                self.emit(EngineEvent::WeeklyReportReady { week: week.to_owned(), report_id: report.id });
+                Ok(())
+            }
+            Err(e) => Err(review_error(e)),
         }
     }
 
@@ -258,6 +310,7 @@ impl Engine {
             })
             .await?;
         let queued = self.enqueue_many(jobs).await?;
+        self.enqueue(Job::FetchRank { account_id }).await?;
         tracing::info!(account_id, listed = total, queued, "match list synced");
         Ok(())
     }
@@ -374,7 +427,16 @@ impl Engine {
         self.db
             .call(move |c| rc_store::metrics::save_match_metrics(c, &id, version, &metrics.by_participant, &deaths))
             .await?;
-        self.emit(EngineEvent::MetricsComputed { match_id: match_id.to_owned() });
+        let id = match_id.to_owned();
+        let benchmark = self
+            .db
+            .call(move |c| {
+                Ok(c.query_row("SELECT benchmark_tier IS NOT NULL FROM matches WHERE match_id = ?1", [&id], |r| {
+                    r.get(0)
+                })?)
+            })
+            .await?;
+        self.emit(EngineEvent::MetricsComputed { match_id: match_id.to_owned(), benchmark });
         if timeline.is_some() {
             let review_queued = self.maybe_queue_auto_review(match_id).await?;
             self.maybe_post_game_ready(match_id, review_queued).await?;
@@ -485,6 +547,56 @@ impl Engine {
         Ok(())
     }
 
+    /// Queues the weekly report for the week that just ended, if the setting
+    /// is on and the week had enough games.
+    pub(crate) async fn maybe_queue_weekly_report(&self) -> JobResult {
+        let target = self
+            .db
+            .call(|c| {
+                let s = rc_store::settings::app(c)?;
+                if !s.ai.auto_weekly {
+                    return Ok(None);
+                }
+                let account = match s.active_account_id {
+                    Some(a) => accounts::get_account(c, a)?,
+                    None => accounts::primary_account(c)?,
+                };
+                let Some(account) = account else { return Ok(None) };
+                let now = rc_common::time::now_ms();
+                let Some(week) = rc_coach::weekly::last_complete_week(now) else { return Ok(None) };
+                let summary = rc_coach::weekly::list(c, account.id, 3, now)?.into_iter().find(|w| w.week == week);
+                let eligible = summary.is_some_and(|w| {
+                    w.rift_games >= WEEKLY_MIN_GAMES && !w.has_report && now - w.end_ms < AUTO_WEEKLY_MAX_AGE_MS
+                });
+                Ok(eligible.then_some((account.id, week)))
+            })
+            .await?;
+        if let Some((account_id, week)) = target {
+            self.enqueue(Job::WeeklyReport { account_id, week }).await?;
+        }
+        Ok(())
+    }
+
+    /// Queues a rank refresh for tracked accounts whose rank is stale.
+    pub(crate) async fn refresh_stale_ranks(&self) -> JobResult {
+        let stale = self
+            .db
+            .call(|c| {
+                let now = rc_common::time::now_ms();
+                let mut out = Vec::new();
+                for a in accounts::list_accounts(c)? {
+                    let at = rc_store::bench::ranks_fetched_at(c, a.id)?;
+                    if at.is_none_or(|t| now - t > RANK_MAX_AGE_MS) && accounts::current_puuid(c, a.id)?.is_some() {
+                        out.push(Job::FetchRank { account_id: a.id });
+                    }
+                }
+                Ok(out)
+            })
+            .await?;
+        self.enqueue_many(stale).await?;
+        Ok(())
+    }
+
     async fn ddragon_sync(&self, patch: &str) -> JobResult {
         let version = self.ddragon.version_for_patch(patch).await?;
         self.ddragon.ensure_version(&version).await?;
@@ -533,7 +645,7 @@ fn non_empty(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_owned())
 }
 
-fn to_rows(dto: &MatchDto, platform: Platform) -> (NewMatch, Vec<NewParticipant>) {
+pub(crate) fn to_rows(dto: &MatchDto, platform: Platform) -> (NewMatch, Vec<NewParticipant>) {
     let info = &dto.info;
     let new_match = NewMatch {
         match_id: dto.metadata.match_id.clone(),

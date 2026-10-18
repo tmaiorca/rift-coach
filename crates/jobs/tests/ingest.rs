@@ -75,6 +75,12 @@ async fn harness(mount_account: bool) -> Harness {
             .await;
     }
 
+    Mock::given(path_regex(r"^/lol/league/v4/entries/by-puuid/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"queueType": "RANKED_SOLO_5x5", "tier": "GOLD", "rank": "II", "leaguePoints": 40, "wins": 10, "losses": 8}
+        ])))
+        .mount(&riot)
+        .await;
     let ddragon = MockServer::start().await;
     Mock::given(path("/api/versions.json"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!(["16.20.1"])))
@@ -220,6 +226,10 @@ async fn ingests_recorded_fixtures() {
             .mount(&riot)
             .await;
     }
+    Mock::given(path("/lol/league/v4/entries/by-puuid/FIXTURE-PUUID-SELF"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(read("league-entries.json")))
+        .mount(&riot)
+        .await;
     let ddragon = MockServer::start().await;
     Mock::given(method("GET")).respond_with(ResponseTemplate::new(503)).mount(&ddragon).await;
 
@@ -263,6 +273,9 @@ async fn ingests_recorded_fixtures() {
     // Only the Data Dragon job (mock is down) failed.
     let failures = engine.status().await.expect("status").recent_failures;
     assert!(failures.iter().all(|f| f.kind == "ddragon_sync"), "{failures:?}");
+    // The rank came along with the sync.
+    let ranks = db.with(|c| rc_store::bench::ranks(c, 1)).expect("ranks");
+    assert!(ranks.iter().any(|r| r.queue_type == "RANKED_SOLO_5x5" && r.tier.is_some()), "{ranks:?}");
 
     // Metrics were still computed for all ten players of every match, but
     // stored as partial (version 0) so a later start completes them.

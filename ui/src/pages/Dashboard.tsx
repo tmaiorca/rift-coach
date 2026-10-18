@@ -5,6 +5,7 @@ import { LineChart } from "../components/LineChart";
 import { ChampionIcon, ChampionsContext, useChampionName } from "../lib/assets";
 import { ago, formatMetric, roleLabel } from "../lib/format";
 import type {
+  Rank,
   ActivityEntry,
   BucketSnapshot,
   ChampionEntry,
@@ -46,12 +47,14 @@ export function Dashboard({
   const [defs, setDefs] = useState<MetricDef[]>([]);
   const [trend, setTrend] = useState("cs_10");
   const [error, setError] = useState<string | null>(null);
+  const [ranks, setRanks] = useState<Rank[]>([]);
   const name = useChampionName();
   const champions = useContext(ChampionsContext);
 
   useEffect(() => {
     api.dashboard().then(setView, (e) => setError(String(e)));
     api.listGoals(false).then(setGoals, () => {});
+    api.ranks().then(setRanks, () => {});
     api.patterns().then(
       (p) => setSignals(p.signals.filter((s) => s.polarity === "weakness").slice(0, 3)),
       () => setSignals([]),
@@ -105,6 +108,13 @@ export function Dashboard({
             {account.game_name}
             <span className="muted">#{account.tag_line}</span>
           </h1>
+          <div className="ranks">
+            {ranks.map((r) => (
+              <span key={r.queue_type} className="tag gold" title={`${r.wins}W ${r.losses}L`}>
+                {r.queue_type === "RANKED_SOLO_5x5" ? "Solo" : "Flex"}: {rankText(r)}
+              </span>
+            ))}
+          </div>
         </div>
         <div className="hero-stats">
           <Big
@@ -357,4 +367,12 @@ function aggregateChampions(view: DashboardView | null, champions: Map<number, C
     id: idOf.get(r.champion_name.toLowerCase()) ?? null,
     patch: "latest",
   }));
+}
+
+const TIER = (t: string) => t.charAt(0) + t.slice(1).toLowerCase();
+
+function rankText(r: Rank): string {
+  if (!r.tier) return "unranked";
+  const apex = ["MASTER", "GRANDMASTER", "CHALLENGER"].includes(r.tier);
+  return `${TIER(r.tier)}${apex ? "" : ` ${r.division ?? ""}`} · ${r.lp} LP`;
 }

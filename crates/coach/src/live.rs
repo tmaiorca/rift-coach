@@ -99,7 +99,20 @@ pub fn context(
         None
     };
 
-    if let (Some(account_id), Some(role)) = (input.account_id, role) {
+    // Benchmark: the higher-rank median on this champion (or role) when
+    // collected, else the top 30% of your own lobbies.
+    if let Some(role) = role {
+        let patch = crate::benchmarks::current_patch(conn)?;
+        let (role_pop, champ_pop) =
+            crate::benchmarks::populations(conn, &settings.benchmarks.tier, patch.as_deref(), role, input.champion)?;
+        if let Some(b) = champ_pop.or(role_pop)
+            && let Some(v) = b.pop.get("cspm").filter(|v| v.len() >= crate::benchmarks::MIN_CHAMPION_SAMPLE)
+        {
+            ctx.benchmark =
+                Some(Benchmark { per_min: rc_metrics::percentile::median(v), label: format!("median of {}", b.label) });
+        }
+    }
+    if let (None, Some(account_id), Some(role)) = (&ctx.benchmark, input.account_id, role) {
         let pop = store_metrics::role_population(conn, account_id, role, None)?;
         if let Some(v) = pop.get("cspm").filter(|v| v.len() >= BENCHMARK_MIN_POPULATION) {
             ctx.benchmark = Some(Benchmark {

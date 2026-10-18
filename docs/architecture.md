@@ -67,6 +67,66 @@ so the list fills first. Each stored match and timeline queues
 `ComputeMetrics`; with auto review on, a fresh game (ended < 6 h ago) of the
 active account then queues `AiReview`.
 
+## Benchmark collection
+
+`rc-jobs::bench` runs a single background task, not queue jobs, so its pace is
+easy to bound. Each step makes at most two Riot calls and is followed by
+`benchmarks.step_seconds` (default 5 s), keeping it under half of a Personal
+key's 100 calls per 2 minutes. A step only runs when no game is active, no
+user job is queued or running, and the key is usable. All state is in SQLite
+(`bench_players`, `bench_queue`, `bench_seeds`), so it resumes after a
+restart. Steps, in order of need:
+
+1. **Seed** (weekly, per key generation and tier): League-V4 entries for the
+   tier (Diamond I and II pages, or the Master/GM/Challenger lists) into
+   `bench_players`. PUUIDs there are only valid for their key generation.
+2. **Fetch** the highest-priority queued match: skip it if stored, older than
+   the current patch, or a remake. Otherwise remove other players' names from
+   the raw JSON, store it with `matches.benchmark_tier`, fetch the timeline,
+   and queue `ComputeMetrics` (metrics for all ten players). If a tracked
+   account is in the game, it stays an ordinary game.
+3. **Scan** a player known to main a focus champion.
+4. **Check** a player's top 10 masteries (`focus_score`), alternating with
+   step 5 while role samples are also short.
+5. **Scan** any player: their solo queue match ids from the last 14 days into
+   `bench_queue` (priority = focus score).
+
+Targets per current patch (`rc_coach::benchmarks`): 300 players in each main
+role and 50 per focus champion. Every 50 fetches, games outside the newest two
+patches or beyond `max_games` are pruned. "Your lobbies" populations
+(`role_population`, death zones) exclude benchmark games. Benchmark
+populations (`rc_store::bench::population`) are per tier, patch, role and
+optional champion. `pick_patch` uses the game's own patch when it has 30 role
+samples, else the newest patch that does.
+
+## Weekly reports and the pre-game brief
+
+`rc_coach::weekly` groups games into local Monday–Sunday weeks (chrono
+`Local`). It summarizes a week against the four before, using the same
+`summarize` as sessions, plus a per-week trend and benchmark gaps for the
+week's main role. The report (`weekly_report.v1`, scope `week:<monday>`) uses
+the review format and validator. The 10-minute checker queues `WeeklyReport`
+for the last complete week when `ai.auto_weekly` is on. It also refreshes
+ranks older than 6 hours (`FetchRank`, also queued after every match-list
+sync).
+
+The pre-game brief is built by the live poller. On the loading screen (or at
+game start, if the app opened mid-game) it spawns `build_brief`: Spectator-V5
+for each tracked account (active first), keeping only champion ids and teams.
+`rc_coach::pregame::brief` then adds:
+
+- your record on the champion;
+- a likely lane opponent: the enemy most often in your role across stored
+  games;
+- your record against it in lane and against each enemy;
+- top weakness patterns, goals, and benchmark targets.
+
+It's published in `LiveState.brief` and stored on the `live_games` row. The
+optional AI plan (`pregame_brief.v1`, its own format checked by
+`validate_plan`) is only started on the loading screen: automatically with
+`ai.auto_pregame`, or by `LiveCommand::GeneratePlan` from the UI. Both run
+off the poll loop and report back over a channel.
+
 ## Live games and game-aware scheduling
 
 `rc-live` reads `/liveclientdata/allgamedata` and keeps only the active

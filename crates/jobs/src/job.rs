@@ -47,6 +47,15 @@ pub enum Job {
         account_id: i64,
         live_game_id: i64,
     },
+    /// Ranked standing (League-V4) of a tracked account.
+    FetchRank {
+        account_id: i64,
+    },
+    /// AI weekly report for the week starting `week` (local date, YYYY-MM-DD).
+    WeeklyReport {
+        account_id: i64,
+        week: String,
+    },
 }
 
 impl Job {
@@ -61,6 +70,8 @@ impl Job {
             Self::AiReview { .. } => "ai_review",
             Self::SessionReview { .. } => "session_review",
             Self::PostGame { .. } => "post_game",
+            Self::FetchRank { .. } => "fetch_rank",
+            Self::WeeklyReport { .. } => "weekly_report",
         }
     }
 
@@ -76,6 +87,8 @@ impl Job {
             Self::AiReview { account_id, match_id } => format!("review:{account_id}:{match_id}"),
             Self::SessionReview { account_id, scope } => format!("session_review:{account_id}:{scope}"),
             Self::PostGame { live_game_id, .. } => format!("post_game:{live_game_id}"),
+            Self::FetchRank { account_id } => format!("rank:{account_id}"),
+            Self::WeeklyReport { account_id, week } => format!("weekly:{account_id}:{week}"),
         }
     }
 
@@ -86,13 +99,14 @@ impl Job {
             // The game you just played comes before any backfill.
             Self::PostGame { .. } => 110,
             Self::ResolveAccount { .. } => 100,
+            Self::FetchRank { .. } => 85,
             Self::SyncMatchList { .. } => 90,
             Self::DdragonSync { .. } => 80,
             // Local and cheap: keeps the UI's numbers current while fetching.
             Self::ComputeMetrics { .. } => 70,
             Self::FetchMatch { .. } => 50,
             Self::FetchTimeline { .. } => 40,
-            Self::AiReview { .. } | Self::SessionReview { .. } => 20,
+            Self::AiReview { .. } | Self::SessionReview { .. } | Self::WeeklyReport { .. } => 20,
         }
     }
 
@@ -102,7 +116,7 @@ impl Job {
             Self::FetchMatch { .. } | Self::FetchTimeline { .. } => 8,
             // With the default backoff this keeps looking for about 1.5 hours.
             Self::PostGame { .. } => 10,
-            Self::AiReview { .. } | Self::SessionReview { .. } => 3,
+            Self::AiReview { .. } | Self::SessionReview { .. } | Self::WeeklyReport { .. } => 3,
             _ => 5,
         }
     }
@@ -119,6 +133,8 @@ impl Job {
             Self::AiReview { match_id, .. } => format!("AI review {match_id}"),
             Self::SessionReview { .. } => "AI session review".to_owned(),
             Self::PostGame { .. } => "find your last game".to_owned(),
+            Self::FetchRank { account_id } => format!("rank for account {account_id}"),
+            Self::WeeklyReport { week, .. } => format!("AI weekly report ({week})"),
         }
     }
 
@@ -130,6 +146,7 @@ impl Job {
                 | Self::FetchMatch { .. }
                 | Self::FetchTimeline { .. }
                 | Self::PostGame { .. }
+                | Self::FetchRank { .. }
         )
     }
 }

@@ -5,7 +5,9 @@ computes detailed metrics for every one of them, compares you with the players
 in your own games and with your own history, finds the habits that repeat
 across your games and which of your numbers actually go with winning, tracks
 focus goals game by game, and (with your own AI key) writes grounded reviews
-of single games and whole play sessions. While you play it stays out of the
+of single games, play sessions and whole weeks. It also collects games of
+higher-ranked players in the background, so you can see where your numbers
+would rank among them. While you play it stays out of the
 way: it shows only your own numbers on a second screen, pauses its background
 work, and analyzes the game as soon as Riot publishes it. Everything stays on
 your PC.
@@ -13,8 +15,8 @@ your PC.
 > This guide is also the **Guide** page inside the app. It's one file
 > (`README.md`), so the app and GitHub always show the same text.
 
-**Status:** Phase 4 of 6 (live companion, game-aware scheduling, analysis when
-a game ends). See [Roadmap](#roadmap).
+**Status:** Phase 5 of 6 (higher-rank benchmarks, weekly reports, loading-screen
+brief, rank). See [Roadmap](#roadmap).
 
 ## Contents
 
@@ -23,7 +25,10 @@ a game ends). See [Roadmap](#roadmap).
 - [How the numbers work](#how-the-numbers-work)
 - [Patterns and what wins your games](#patterns-and-what-wins-your-games)
 - [Focus goals](#focus-goals)
+- [Higher-rank benchmarks](#higher-rank-benchmarks)
+- [Weekly reports](#weekly-reports)
 - [Live games](#live-games)
+- [The loading-screen brief](#the-loading-screen-brief)
 - [The AI coach](#the-ai-coach)
 - [Settings](#settings)
 - [Your data, keys and privacy](#your-data-keys-and-privacy)
@@ -56,7 +61,12 @@ games alongside, a trend chart for any metric with a 5-game rolling average,
 your champions, recent games, sync progress, Riot rate-limit meters, and the
 activity log. The log is saved, so it's still there after a restart.
 
-**Live.** While a game runs: the game clock, your KDA, CS and gold, CS pacing
+**Dashboard rank.** Your Solo and Flex rank (League-V4) shows under your name,
+refreshed after each sync and every 6 hours.
+
+**Live.** On the loading screen: the pre-game brief (see
+[The loading-screen brief](#the-loading-screen-brief)). While a game runs: the
+game clock, your KDA, CS and gold, CS pacing
 against your target, gold toward the next item of your planned build, and your
 focus goals' numbers this game (see [Live games](#live-games)). **Pop out
 window** opens a small window for a second monitor. Below that: your last
@@ -75,7 +85,7 @@ open it.
   (e.g. 2+ deaths before 14:00), with the moments involved, and whether it's a
   **habit** (it recurs in your recent games) or a one-off.
 - *Metrics*: every metric for this game, grouped (laning, macro, fighting,
-  economy, vision, items), each with two comparisons (see below).
+  economy, vision, items), each with three comparisons (see below).
 - *Timeline*: gold, XP and CS minute by minute, as a difference against your
   lane opponent or both lines together, plus your team's gold lead. Red lines
   mark your deaths.
@@ -97,14 +107,23 @@ session gap apart, 60 minutes by default). For each session: results in order,
 each game's pattern tags, the session's averages against your usual numbers,
 which patterns showed up more than usual, and an AI session review.
 
+**Weekly.** Your weeks (Monday to Sunday): results, champions played, the
+week's averages against the four weeks before, patterns, an 8-week trend of key
+numbers, the week against higher ranks, and an AI weekly report. See
+[Weekly reports](#weekly-reports).
+
+**Benchmarks.** Collection progress, and your typical numbers in a role (or
+on one champion) against the benchmark tier, worst first. See
+[Higher-rank benchmarks](#higher-rank-benchmarks).
+
 **Goals.** Create, follow, finish or drop focus goals. See [Focus goals](#focus-goals).
 
 **Players.** Track any number of Riot IDs (smurfs, friends, opponents). Switch
 the player you're viewing from the top bar. "This is me" marks your own account.
 Removing a player deletes their reviews but keeps the stored matches.
 
-**AI reports.** The full history of every review (games and sessions),
-including regenerated ones, with token usage.
+**AI reports.** The full history of every report (games, sessions, weeks and
+game plans), including regenerated ones, with token usage.
 
 **Settings.** See [Settings](#settings).
 
@@ -123,12 +142,16 @@ any time and are covered by unit tests.
 | Vision | Vision score per minute; wards placed and cleared per minute; control wards |
 | Items | Time of first completed (non-boots) item |
 
-**Comparisons.** Each metric shows "better than X%" against two groups:
+**Comparisons.** Each metric shows "better than X%" against three groups:
 
 - **Players in your role in your games.** Everyone else who played that role
   in your stored games. These are mostly your lane opponents, so they're
   roughly your skill bracket. It's not a global ladder.
 - **Your games.** Your previous games in that role, within the look-back window.
+- **Higher ranks.** Players of the benchmark tier (Diamond by default) in that
+  role on the same patch, or on your champion when at least 15 were collected.
+  It needs 30 players in the role first; until then it says "not enough
+  data". See [Higher-rank benchmarks](#higher-rank-benchmarks).
 
 For metrics where lower is better (deaths, time dead), "better" means lower.
 Lane differences (CS/gold/XP diff) are compared only with your own games,
@@ -191,6 +214,53 @@ games*). It counts your Summoner's Rift games played after you create it.
   delete a goal. Up to 3 can be active at once.
 - AI reviews (game and session) see your active goals and comment on them.
 
+## Higher-rank benchmarks
+
+"Better than most players in your games" only tells you where you stand in
+your own bracket. Benchmarks show what the next level looks like.
+
+- **What's collected.** Recent solo queue games of players in the benchmark
+  tier (Emerald, Diamond or Master+; Settings → Benchmarks). Rift Coach reads
+  the ladder (League-V4), lists those players' games from the last two weeks,
+  downloads each match and timeline, and runs the same metrics on all ten
+  players. Benchmarks are kept per patch (the newest two patches are kept).
+- **Your champions first.** It checks players' top champion masteries and
+  samples those who main your focus champions first (by default your most
+  played champions with 5+ games in your last 50, LeBlanc for you). Every game
+  also adds samples for every role in it.
+- **Targets.** 300 players in each of your main roles and 50 on each focus
+  champion, per patch. When they're met, collection stops until the next patch
+  or the weekly ladder refresh.
+- **Polite.** One step every 5 seconds (1–2 Riot calls each), which is under
+  half your key's limit. It never runs during a game, while your own games are
+  downloading, or with a key problem. It picks up where it left off after a
+  restart.
+- **Private.** Other players' names are removed from benchmark games before
+  they're stored. Benchmark games never count as "your games" or "players in
+  your games".
+- **Disk.** About 60 KB per game, up to 2,000 games by default (about 120 MB).
+- **Where it shows.** A third comparison on every match, the Benchmarks page,
+  the Weekly page, the live view's CS benchmark (the median for your champion
+  or role), the loading-screen brief's targets, and the AI facts.
+
+The comparison is with players of that tier in that role, sampled from games
+of ladder players in it. Their lobbies are mostly the same tier but not
+exclusively, so treat it as "players around that rank", not an exact ladder.
+
+## Weekly reports
+
+The Weekly page groups your games by week (Monday to Sunday, local time). For
+each week: results and champions, the week's averages against your four weeks
+before, which patterns showed up and how often they usually do, an 8-week
+trend for CS at 10:00, gold diff at 15:00, deaths before 14:00, solo deaths,
+kill participation and vision, and your week against the benchmark tier.
+
+**Write the weekly report** asks the AI for a trend report: what improved or
+slipped, recurring habits, the biggest early-game gaps to higher ranks, and
+one focus for next week (which you can track as a goal). It's checked like any
+other report. With **Automatically write a weekly report** on, it's written
+after each week with 3+ Summoner's Rift games.
+
 ## Live games
 
 Rift Coach checks every few seconds whether a game is running (it asks the
@@ -209,8 +279,9 @@ the game, and the end screen.
   - **CS pacing** from 5:00: your CS against *target × minutes played*. The
     target is, in order: the one in Settings → Live, an active "CS per minute
     at least" goal, or your own average in that role. The benchmark line is
-    the top 30% of players in your role across your stored games (Phase 5
-    adds real higher-rank benchmarks).
+    the median of the benchmark tier on your champion (or in your role), or,
+    until enough are collected, the top 30% of players in your role in your
+    own games.
   - **Build:** gold toward the next item you don't own yet in your planned
     build, counting the components of it you already hold. With no saved plan
     it uses your most common finished items on that champion.
@@ -247,14 +318,41 @@ window (or minimizing the main one) saves the most.
 or remove items (finished items and boots for Summoner's Rift, up to 8) and
 **Save plan**. **Use my usual items instead** removes the saved plan.
 
+## The loading-screen brief
+
+When the loading screen appears, Rift Coach asks Riot's Spectator API which
+champions are in your game (one call), and builds a brief on the Live page and
+the pop-out window:
+
+- **Your record** on your champion (games, wins, CS at 10, lane diffs, early
+  deaths).
+- **Likely lane opponent.** Spectator doesn't report roles, so it's the enemy
+  champion most often played in your role across stored games. You see your
+  past games against it in lane.
+- **Your record against each enemy champion.**
+- **Watch:** your top two recurring habits, with a tip, and your focus goals.
+- **Targets:** benchmark medians for CS at 10, CS per minute, early deaths and
+  kill participation on your champion, with your own averages.
+
+**AI game plan (optional).** With **Write an AI game plan at the loading
+screen** on (Settings → AI coach), or with the button while you're still
+loading, the AI writes 2–4 plan points, up to 3 things to watch out for, and
+one focus, from the brief alone. It's written once and never updated during
+the game.
+
+The brief uses champions only: never other players' names, ranks or histories.
+If the app opens mid-game you still get the brief, but no AI plan.
+
 ## The AI coach
 
 - **What it sees.** Only computed facts: for a game, the metrics, the
   comparisons, your deaths with context, champions, result and items, the
   patterns this game showed (and whether they're habits), and your active
   goals; for a session, each game's key numbers and patterns, the session's
-  averages against your usual, and your goals. Click **Facts sent** to see
-  exactly what's sent. Other players' Riot IDs and raw API data are never sent.
+  averages against your usual, and your goals; for a week, the week's averages
+  against the four before, champions, patterns, the 8-week trend and benchmark
+  gaps; for a game plan, the brief. Click **Facts sent** to see exactly what's
+  sent. Other players' Riot IDs and raw API data are never sent.
 - **What it returns.** A summary, what went well, what to improve, 1–3
   priority fixes with a concrete drill, one focus for your next games (or
   session), how your goals went, and a confidence level. Each point cites the
@@ -288,6 +386,13 @@ or remove items (finished items and boots for Summoner's Rift, up to 8) and
 | Riot API key | Save, replace or remove the key in Windows Credential Manager; reload after changing the environment variable |
 | AI provider, key, model, endpoint | Which AI to use. **Load models** lists the models your key can use; **Test connection** sends a one-word prompt |
 | Max output tokens | Upper bound per review (default 4000) |
+| Automatically write a weekly report | After each week with 3+ Summoner's Rift games (default off) |
+| Write an AI game plan at the loading screen | One short static plan per game (default off) |
+| Collect higher-rank games | Background benchmark collection (default on) |
+| Compare with | Benchmark tier: Emerald, Diamond (default) or Master and above |
+| Champions to sample first | Up to 3; empty = your most played |
+| Pace | Seconds between collection steps (default 5; each step makes 1–2 Riot calls) |
+| Keep up to N games | Benchmark games kept on disk (default 2,000, about 120 MB) |
 | Detect running games | Watch for a game for the live view and post-game analysis (default on) |
 | Pause background work during games | Hold fetching, analysis and AI work while a game runs (default on) |
 | Notify me when a finished game is analyzed | Windows notification when your last game (or its AI review) is ready (default on) |
@@ -319,8 +424,12 @@ or remove items (finished items and boots for Summoner's Rift, up to 8) and
 Riot doesn't allow third-party tools to "draw conclusions for you during
 gameplay", reveal hidden information, or automate input. So Rift Coach:
 
-- runs the AI only **after** a game (and, from Phase 5, from the loading
-  screen as a static game plan), never in reaction to a live game;
+- runs the AI only **after** a game, or once on the loading screen for a
+  static game plan built from champions and your own history, never in
+  reaction to a live game;
+- uses only champions from Spectator for the brief: no other player's name,
+  rank or history (Riot forbids de-anonymizing players, and the app does no
+  scouting of individuals);
 - won't track enemy cooldowns or timers, give live alerts, read game memory,
   or estimate MMR;
 - shows only your own factual numbers during a game, next to targets you set
@@ -342,6 +451,9 @@ gameplay", reveal hidden information, or automate input. So Rift Coach:
 | The Live page doesn't notice my game | Check Settings → Live → Detect running games. The game client must be running a game (not the lobby or champ select) |
 | "Waiting for Riot to publish the match" for a long time | Riot occasionally takes longer; it keeps checking for about 1.5 hours. A sync also picks it up |
 | My game wasn't analyzed | Only tracked Riot IDs are analyzed; add the account on the Players page |
+| The higher-ranks column says "not enough data" | Benchmarks are still being collected (Benchmarks page shows progress); it needs 30 players in your role on the patch |
+| Benchmarks say "Waiting" | They pause during games, while your own games download, and when the Riot key has a problem |
+| No brief on the loading screen | The brief needs Riot's Spectator API to see your game, which can lag a few seconds; it shows "None of your tracked Riot IDs is in a game" when it can't |
 | CS in the live view jumps in steps | That's how the game client reports it; the number catches up |
 
 ## For developers
@@ -358,6 +470,7 @@ npm run lint                         # eslint + TypeScript
 cargo run -p rc-cli -- analyze       # print the newest game's metrics and percentiles
 cargo run -p rc-cli -- patterns --games 100 --sessions   # patterns, win links, sessions
 cargo run -p rc-cli -- mock-live --speed 10              # a scripted game for the live view
+cargo run -p rc-cli -- benchmarks [--collect 5]          # benchmark progress and gaps (collect for 5 min first)
 ```
 
 To try the live view without League, run `mock-live` in one terminal and the
@@ -377,5 +490,5 @@ replaced.
 2. ✅ Metrics and baselines, match detail with charts and death map, AI post-game review, settings, player lookup.
 3. ✅ Patterns across games, win correlation, death heat map, focus goals, session reviews, AI token cap.
 4. ✅ Live companion (your own numbers only), game-aware scheduling, analysis and review at game end, footprint measurement.
-5. Higher-rank benchmarks, weekly reports, loading-screen game plan.
+5. ✅ Higher-rank benchmarks by patch, benchmark percentiles, weekly reports, loading-screen brief and AI game plan, rank.
 6. MCP server for AI agents, installer, first-run wizard, auto-update.

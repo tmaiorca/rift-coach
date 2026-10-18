@@ -13,6 +13,11 @@ import type {
   KeyStatus,
   LiveGameView,
   LiveState,
+  BenchmarkStatus,
+  GapsView,
+  Rank,
+  WeekDetail,
+  WeekSummary,
   BuildPlanView,
   PlannerItem,
   MatchDetail,
@@ -93,6 +98,17 @@ export const api = {
   setBuildPlan: (champion: string, items: number[]) =>
     invoke<BuildPlanView>("set_build_plan", { champion, items }),
   openLiveWindow: () => invoke<void>("open_live_window"),
+  generateGamePlan: () => invoke<void>("generate_game_plan"),
+
+  benchmarkStatus: () => invoke<BenchmarkStatus>("benchmark_status"),
+  benchmarkGaps: (role: string | null = null, champion: string | null = null) =>
+    invoke<GapsView | null>("benchmark_gaps", { role, champion }),
+  ranks: () => invoke<Rank[]>("ranks"),
+  listWeeks: (limit = 52) => invoke<WeekSummary[]>("list_weeks", { limit }),
+  weekDetail: (week: string) => invoke<WeekDetail>("week_detail", { week }),
+  generateWeeklyReport: (week: string, force: boolean) =>
+    invoke<Report>("generate_weekly_report", { week, force }),
+  weeklyFacts: (week: string) => invoke<unknown>("weekly_facts", { week }),
 };
 
 export function onEngineEvent(handler: (e: EngineEvent) => void): Promise<UnlistenFn> {

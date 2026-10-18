@@ -48,6 +48,7 @@ pub struct AppSettings {
     pub ai: AiSettings,
     pub appearance: AppearanceSettings,
     pub live: LiveSettings,
+    pub benchmarks: BenchmarkSettings,
 }
 
 impl Default for AppSettings {
@@ -61,9 +62,33 @@ impl Default for AppSettings {
             ai: AiSettings::default(),
             appearance: AppearanceSettings::default(),
             live: LiveSettings::default(),
+            benchmarks: BenchmarkSettings::default(),
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct BenchmarkSettings {
+    /// Collect higher-rank games in the background (never during a game).
+    pub enabled: bool,
+    /// `EMERALD`, `DIAMOND` or `MASTER` (Master and above).
+    pub tier: String,
+    /// Champions to sample first (Data Dragon ids). Empty = your most played.
+    pub champions: Vec<String>,
+    /// Seconds between collection steps (each makes 1-2 Riot calls).
+    pub step_seconds: u32,
+    /// Most benchmark games kept on disk (about 60 KB each).
+    pub max_games: u32,
+}
+
+impl Default for BenchmarkSettings {
+    fn default() -> Self {
+        Self { enabled: true, tier: "DIAMOND".into(), champions: Vec::new(), step_seconds: 5, max_games: 2000 }
+    }
+}
+
+pub const BENCHMARK_TIERS: [&str; 3] = ["EMERALD", "DIAMOND", "MASTER"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -100,6 +125,10 @@ pub struct AiSettings {
     pub auto_post_game: bool,
     /// Review a play session automatically once it has ended.
     pub auto_session: bool,
+    /// Write a weekly report automatically for the week that just ended.
+    pub auto_weekly: bool,
+    /// Write an AI game plan at the loading screen (from champions only).
+    pub auto_pregame: bool,
     pub max_tokens: u32,
     /// Stop generating reports once this many tokens were used in the last
     /// 30 days. `None` = no cap.
@@ -114,6 +143,8 @@ impl Default for AiSettings {
             base_url: None,
             auto_post_game: false,
             auto_session: false,
+            auto_weekly: false,
+            auto_pregame: false,
             max_tokens: 4000,
             monthly_token_limit: None,
         }
@@ -159,6 +190,8 @@ mod tests {
             assert_eq!(s.ai.monthly_token_limit, None);
             assert!(s.live.enabled && s.live.pause_background);
             assert_eq!(s.live.keep_snapshots_days, 7);
+            assert_eq!(s.benchmarks.tier, "DIAMOND");
+            assert!(s.benchmarks.enabled && !s.ai.auto_weekly && !s.ai.auto_pregame);
             Ok(())
         })
         .expect("ok");

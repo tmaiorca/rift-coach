@@ -529,6 +529,15 @@ pub async fn save_settings(state: State<'_, AppState>, new: AppSettings) -> CmdR
     if new.live.cs_target_pm.is_some_and(|t| !(1.0..=15.0).contains(&t)) {
         return Err("The CS per minute target must be between 1 and 15.".into());
     }
+    if !rc_store::settings::BENCHMARK_TIERS.contains(&new.benchmarks.tier.as_str()) {
+        return Err("Benchmark tier must be Emerald, Diamond or Master+.".into());
+    }
+    if !(2..=60).contains(&new.benchmarks.step_seconds) {
+        return Err("Benchmark collection speed must be between 2 and 60 seconds per step.".into());
+    }
+    if !(200..=20_000).contains(&new.benchmarks.max_games) {
+        return Err("Keep between 200 and 20,000 benchmark games.".into());
+    }
     if new.live.keep_snapshots_days > 365 {
         return Err("Live snapshots can be kept for at most 365 days.".into());
     }
@@ -537,6 +546,10 @@ pub async fn save_settings(state: State<'_, AppState>, new: AppSettings) -> CmdR
         .engine
         .db()
         .call(move |c| {
+            // A new tier starts its own sample; drop ids queued for the old one.
+            if settings::app(c)?.benchmarks.tier != new.benchmarks.tier {
+                rc_store::bench::clear_pending(c)?;
+            }
             settings::set(c, settings::APP, &new)?;
             settings::app(c)
         })
@@ -661,7 +674,7 @@ pub async fn minimap(state: State<'_, AppState>, patch: String) -> CmdResult<Str
 
 #[tauri::command]
 pub fn live_state(state: State<'_, AppState>) -> rc_jobs::LiveState {
-    state.live.borrow().clone()
+    state.live.state.borrow().clone()
 }
 
 /// Recently recorded live games, newest first.
@@ -760,4 +773,115 @@ pub async fn open_live_window(app: tauri::AppHandle) -> CmdResult<()> {
         .build()
         .map_err(err)?;
     Ok(())
+}
+
+// ---------- benchmarks ----------
+
+#[derive(Serialize)]
+pub struct BenchmarkStatus {
+    pub progress: rc_coach::benchmarks::Progress,
+    pub collector: rc_jobs::BenchState,
+}
+
+#[tauri::command]
+pub async fn benchmark_status(state: State<'_, AppState>) -> CmdResult<BenchmarkStatus> {
+    let account_id = active_account_id(&state).await.ok();
+    let progress = state
+        .engine
+        .db()
+        .call(move |c| rc_coach::benchmarks::progress(c, account_id, &settings::app(c)?))
+        .await
+        .map_err(err)?;
+    Ok(BenchmarkStatus { progress, collector: state.bench.borrow().clone() })
+}
+
+/// Your recent games (look-back window) in a role, optionally on one
+/// champion, against the benchmark tier. Defaults to your main role.
+#[tauri::command]
+pub async fn benchmark_gaps(
+    state: State<'_, AppState>,
+    role: Option<String>,
+    champion: Option<String>,
+) -> CmdResult<Option<rc_coach::benchmarks::GapsView>> {
+    let account_id = active_account_id(&state).await?;
+    state
+        .engine
+        .db()
+        .call(move |c| {
+            let s = settings::app(c)?;
+            let role = match role {
+                Some(r) => r,
+                None => match rc_coach::benchmarks::focus(c, Some(account_id), &s)?.roles.into_iter().next() {
+                    Some(r) => r,
+                    None => return Ok(None),
+                },
+            };
+            let filter = rc_store::metrics::GameFilter { limit: s.baseline_games, ..Default::default() };
+            Ok(Some(rc_coach::benchmarks::gaps(c, account_id, &s, &role, champion.as_deref(), filter)?))
+        })
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn ranks(state: State<'_, AppState>) -> CmdResult<Vec<rc_store::bench::Rank>> {
+    let Ok(account_id) = active_account_id(&state).await else { return Ok(vec![]) };
+    state.engine.db().call(move |c| rc_store::bench::ranks(c, account_id)).await.map_err(err)
+}
+
+// ---------- weekly ----------
+
+#[tauri::command]
+pub async fn list_weeks(state: State<'_, AppState>, limit: u32) -> CmdResult<Vec<rc_coach::weekly::WeekSummary>> {
+    let Ok(account_id) = active_account_id(&state).await else { return Ok(vec![]) };
+    state
+        .engine
+        .db()
+        .call(move |c| rc_coach::weekly::list(c, account_id, limit.min(200) as usize, rc_common::time::now_ms()))
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn week_detail(state: State<'_, AppState>, week: String) -> CmdResult<rc_coach::weekly::WeekDetail> {
+    let account_id = active_account_id(&state).await?;
+    state
+        .engine
+        .db()
+        .call(move |c| {
+            let s = settings::app(c)?;
+            Ok(rc_coach::weekly::detail(c, account_id, &week, &s, rc_common::time::now_ms()))
+        })
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn generate_weekly_report(state: State<'_, AppState>, week: String, force: bool) -> CmdResult<Report> {
+    let account_id = active_account_id(&state).await?;
+    let settings = state.engine.db().call(|c| settings::app(c)).await.map_err(err)?;
+    let client = rc_coach::provider::client_from_settings(&settings.ai).map_err(err)?;
+    let opts = rc_coach::review::ReviewOptions::from_settings(&settings, force);
+    let result = rc_coach::review::weekly_report(state.engine.db(), &client, account_id, &week, &opts).await;
+    match &result {
+        Ok(r) => state.engine.log_activity("info", format!("AI weekly report ready ({})", r.model)).await,
+        Err(e) => state.engine.log_activity("error", format!("AI weekly report failed: {e}")).await,
+    }
+    result.map_err(err)
+}
+
+#[tauri::command]
+pub async fn weekly_facts(state: State<'_, AppState>, week: String) -> CmdResult<serde_json::Value> {
+    let account_id = active_account_id(&state).await?;
+    rc_coach::review::weekly_facts(state.engine.db(), account_id, &week).await.map_err(err)
+}
+
+/// Asks for the AI game plan now. Only honored on the loading screen.
+#[tauri::command]
+pub async fn generate_game_plan(state: State<'_, AppState>) -> CmdResult<()> {
+    if state.live.state.borrow().phase != rc_live::Phase::Loading {
+        return Err("Game plans can only be written on the loading screen.".into());
+    }
+    state.live.commands.send(rc_jobs::LiveCommand::GeneratePlan).await.map_err(err)
 }

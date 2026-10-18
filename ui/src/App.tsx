@@ -10,7 +10,9 @@ import { Live } from "./pages/Live";
 import { MatchDetail } from "./pages/MatchDetail";
 import { Matches } from "./pages/Matches";
 import { Patterns } from "./pages/Patterns";
+import { Benchmarks } from "./pages/Benchmarks";
 import { Players } from "./pages/Players";
+import { Weekly } from "./pages/Weekly";
 import { Reports } from "./pages/Reports";
 import { Sessions } from "./pages/Sessions";
 import { Settings } from "./pages/Settings";
@@ -33,6 +35,8 @@ type Page =
   | "match"
   | "patterns"
   | "sessions"
+  | "weekly"
+  | "benchmarks"
   | "goals"
   | "players"
   | "reports"
@@ -45,6 +49,8 @@ const NAV: { id: Page; label: string; icon: string }[] = [
   { id: "matches", label: "Matches", icon: "☰" },
   { id: "patterns", label: "Patterns", icon: "⌖" },
   { id: "sessions", label: "Sessions", icon: "◷" },
+  { id: "weekly", label: "Weekly", icon: "▦" },
+  { id: "benchmarks", label: "Benchmarks", icon: "▲" },
   { id: "goals", label: "Goals", icon: "◎" },
   { id: "players", label: "Players", icon: "⚇" },
   { id: "reports", label: "AI reports", icon: "✦" },
@@ -60,6 +66,7 @@ interface UiState {
   page: Page;
   matchId: string | null;
   sessionScope?: string | null;
+  week?: string | null;
 }
 
 export function App() {
@@ -106,6 +113,7 @@ function Shell() {
           page: (s?.page as Page) ?? "dashboard",
           matchId: (s?.matchId as string) ?? null,
           sessionScope: (s?.sessionScope as string) ?? null,
+          week: (s?.week as string) ?? null,
         }),
       () => setUi({ page: "dashboard", matchId: null }),
     );
@@ -124,6 +132,8 @@ function Shell() {
     const unlistenLive = onLiveUpdate((s) => setLivePhase(s.phase));
     const unlisten = onEngineEvent((ev: EngineEvent) => {
       if (ev.type === "key_status_changed" || ev.type === "in_game_changed") void refreshStatus();
+      // Collected benchmark games don't change anything on screen.
+      if (ev.type === "metrics_computed" && ev.benchmark) return;
       if (
         [
           "match_stored",
@@ -131,6 +141,7 @@ function Shell() {
           "metrics_computed",
           "review_ready",
           "session_review_ready",
+          "weekly_report_ready",
           "live_game_linked",
           "post_game_ready",
           "job_failed",
@@ -163,6 +174,8 @@ function Shell() {
   const openMatch = (id: string) => setUi((u) => ({ ...u, page: "match", matchId: id }));
   const openSession = (scope: string | null) =>
     setUi((u) => ({ ...u, page: "sessions", matchId: u?.matchId ?? null, sessionScope: scope }));
+  const openWeek = (week: string | null) =>
+    setUi((u) => ({ ...u, page: "weekly", matchId: u?.matchId ?? null, week }));
   const draftGoal = (draft: GoalInput) => {
     setGoalDraft(draft);
     go("goals");
@@ -300,6 +313,18 @@ function Shell() {
                 onTrackFocus={draftGoal}
               />
             )}
+            {page === "weekly" && (
+              <Weekly
+                refreshKey={refreshKey}
+                week={ui.week ?? null}
+                onWeek={openWeek}
+                onOpenSettings={() => go("settings")}
+                onTrackFocus={draftGoal}
+              />
+            )}
+            {page === "benchmarks" && (
+              <Benchmarks refreshKey={refreshKey} onOpenSettings={() => go("settings")} />
+            )}
             {page === "goals" && (
               <Goals
                 refreshKey={refreshKey}
@@ -336,7 +361,12 @@ function Shell() {
               />
             )}
             {page === "reports" && (
-              <Reports refreshKey={refreshKey} onOpenMatch={openMatch} onOpenSession={openSession} />
+              <Reports
+                refreshKey={refreshKey}
+                onOpenMatch={openMatch}
+                onOpenSession={openSession}
+                onOpenWeek={openWeek}
+              />
             )}
             {page === "settings" && (
               <Settings

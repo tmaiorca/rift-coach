@@ -9,7 +9,7 @@ use rusqlite::{Connection, params};
 
 use crate::Result;
 
-fn rift_filter() -> String {
+pub(crate) fn rift_filter() -> String {
     let queues = STANDARD_RIFT_QUEUES.iter().map(i32::to_string).collect::<Vec<_>>().join(",");
     format!("m.map_id = {SUMMONERS_RIFT_MAP} AND m.queue_id IN ({queues}) AND m.is_remake = 0")
 }
@@ -153,7 +153,7 @@ pub fn role_death_zones(conn: &Connection, account_id: i64, role: &str) -> Resul
            FROM death_events d
            JOIN match_participants p ON p.match_id = d.match_id AND p.participant_id = d.participant_id
            JOIN matches m ON m.match_id = d.match_id
-          WHERE {} AND p.team_position = ?2
+          WHERE {} AND m.benchmark_tier IS NULL AND p.team_position = ?2
             AND NOT EXISTS (SELECT 1 FROM account_matches am
                              WHERE am.account_id = ?1 AND am.match_id = p.match_id
                                AND am.participant_id = p.participant_id)
@@ -169,7 +169,8 @@ pub fn role_death_zones(conn: &Connection, account_id: i64, role: &str) -> Resul
 pub type Population = HashMap<String, Vec<f64>>;
 
 /// Other players' metrics in the same role across stored Summoner's Rift
-/// games (the account's own rows excluded). `champion` narrows it further.
+/// games (the account's own rows and benchmark games excluded). `champion`
+/// narrows it further.
 pub fn role_population(
     conn: &Connection,
     account_id: i64,
@@ -181,7 +182,7 @@ pub fn role_population(
            FROM participant_metrics pm
            JOIN match_participants p ON p.match_id = pm.match_id AND p.participant_id = pm.participant_id
            JOIN matches m ON m.match_id = pm.match_id
-          WHERE {} AND p.team_position = ?2 AND (?3 IS NULL OR p.champion_name = ?3)
+          WHERE {} AND m.benchmark_tier IS NULL AND p.team_position = ?2 AND (?3 IS NULL OR p.champion_name = ?3)
             AND NOT EXISTS (SELECT 1 FROM account_matches am
                              WHERE am.account_id = ?1 AND am.match_id = p.match_id
                                AND am.participant_id = p.participant_id)",

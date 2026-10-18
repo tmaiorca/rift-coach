@@ -45,7 +45,13 @@ fn metric_json(m: &MetricView) -> Value {
     if m.approximate {
         v["approximate"] = json!(true);
     }
-    for (k, c) in [("vs_role", &m.vs_role), ("vs_champion", &m.vs_champion), ("vs_personal", &m.vs_personal)] {
+    for (k, c) in [
+        ("vs_role", &m.vs_role),
+        ("vs_champion", &m.vs_champion),
+        ("vs_personal", &m.vs_personal),
+        ("vs_benchmark", &m.vs_benchmark),
+        ("vs_benchmark_champion", &m.vs_benchmark_champion),
+    ] {
         if c.is_some() {
             v[k] = cmp_json(c, m.decimals);
         }
@@ -167,6 +173,8 @@ pub fn build(
             "vs_role": cmp.populations.role_label,
             "vs_champion": cmp.populations.champion_label,
             "vs_personal": cmp.populations.personal_label,
+            "vs_benchmark": cmp.populations.benchmark_label,
+            "vs_benchmark_champion": cmp.populations.benchmark_champion_label,
         },
         "metrics": cmp.metrics.iter().map(metric_json).collect::<Vec<_>>(),
         "deaths": deaths.iter().enumerate().map(|(i, d)| json!({
@@ -258,10 +266,91 @@ pub fn session(d: &SessionDetail, goals: &[GoalView]) -> Value {
     })
 }
 
+fn gaps_json(g: &crate::benchmarks::GapsView) -> Value {
+    json!({
+        "reference": g.reference,
+        "your_games": g.games,
+        "metrics": g.gaps.iter().map(|x| json!({
+            "id": format!("bench:{}", x.metric),
+            "label": x.label,
+            "yours": round_to(x.yours, x.decimals.max(1)),
+            "benchmark_median": round_to(x.benchmark_median, x.decimals.max(1)),
+            "better_than_pct_of_benchmark": x.better_than_pct.round(),
+            "early_game": x.early,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// Facts for a weekly report: the week vs the four weeks before, champions,
+/// patterns, the weekly trend, benchmark gaps, and goals.
+pub fn weekly(d: &crate::weekly::WeekDetail, goals: &[GoalView]) -> Value {
+    let s = &d.summary;
+    let mut notes = vec![
+        "Averages and patterns cover Summoner's Rift games only (no ARAM/Arena, no remakes).".to_string(),
+        format!("\"baseline\" values are your averages over the {} games in the 4 weeks before.", d.baseline_games),
+    ];
+    if d.baseline_games < 5 {
+        notes.push("Few games in the weeks before: baseline comparisons are weak.".into());
+    }
+    if d.benchmark.is_none() {
+        notes.push("No benchmark comparison yet (higher-rank games are still being collected).".into());
+    }
+    json!({
+        "week": {
+            "starts": s.week,
+            "games": s.games,
+            "summoners_rift_games": s.rift_games,
+            "wins": s.wins,
+            "losses": s.losses,
+        },
+        "champions": d.champions.iter().map(|c| json!({
+            "id": format!("champ:{}", c.champion),
+            "champion": c.champion,
+            "games": c.games,
+            "wins": c.wins,
+        })).collect::<Vec<_>>(),
+        "aggregates": d.aggregates.iter().map(|a| json!({
+            "id": a.metric,
+            "label": a.label,
+            "unit": a.unit,
+            "higher_is_better": a.higher_is_better,
+            "week_average": round_to(a.session, a.decimals.max(1)),
+            "baseline": a.baseline.map(|b| round_to(b, a.decimals.max(1))),
+            "better_than_baseline": a.better,
+            "games": a.games,
+        })).collect::<Vec<_>>(),
+        "patterns": d.patterns.iter().map(|p| json!({
+            "id": format!("pattern:{}", p.kind),
+            "title": p.title,
+            "type": p.polarity,
+            "rule": p.what,
+            "week_games_affected": p.session_games_affected,
+            "week_games": p.session_games,
+            "baseline_rate_pct": p.baseline_rate_pct,
+        })).collect::<Vec<_>>(),
+        "previous_weeks": d.trend.iter().map(|t| json!({
+            "id": format!("week:{}", t.week),
+            "games": t.games,
+            "win_rate_pct": t.win_rate_pct,
+            "averages": t.metrics.iter().map(|(k, v)| (k.clone(), json!(round_metric(k, *v)))).collect::<serde_json::Map<_, _>>(),
+        })).collect::<Vec<_>>(),
+        "benchmark_gaps": d.benchmark.as_ref().map(gaps_json),
+        "goals": goals_json(goals, None),
+        "notes": notes,
+    })
+}
+
 /// Valid evidence ids in a facts object.
 pub fn evidence_ids(facts: &Value) -> Vec<String> {
-    let mut ids = vec!["match".to_string(), "session".to_string()];
-    for list in ["metrics", "deaths", "patterns", "goals", "games", "aggregates"] {
+    let mut ids = ["match", "session", "week", "matchup", "record"].map(str::to_owned).to_vec();
+    for bench in ["benchmark_gaps", "benchmark_targets"] {
+        if let Some(a) = facts[bench]["metrics"].as_array() {
+            ids.extend(a.iter().filter_map(|m| m["id"].as_str().map(str::to_owned)));
+        }
+    }
+    for list in
+        ["metrics", "deaths", "patterns", "goals", "games", "aggregates", "champions", "previous_weeks", "enemies"]
+    {
         if let Some(a) = facts[list].as_array() {
             ids.extend(a.iter().filter_map(|m| m["id"].as_str().map(str::to_owned)));
         }

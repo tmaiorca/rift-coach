@@ -107,6 +107,8 @@ pub enum EngineEvent {
     },
     MetricsComputed {
         match_id: String,
+        /// A collected benchmark game (the UI ignores these).
+        benchmark: bool,
     },
     ReviewReady {
         match_id: String,
@@ -131,6 +133,14 @@ pub enum EngineEvent {
     /// Background work paused or resumed because a game is running.
     InGameChanged {
         in_game: bool,
+    },
+    WeeklyReportReady {
+        week: String,
+        report_id: i64,
+    },
+    /// The loading-screen brief (and AI game plan, if on) is ready.
+    PregameReady {
+        live_game_id: Option<i64>,
     },
 }
 
@@ -159,6 +169,7 @@ impl EngineEvent {
             Self::PostGameReady { match_id, .. } => ("info", format!("Your last game is analyzed ({match_id})")),
             Self::InGameChanged { in_game: true } => ("info", "Game detected: background work paused".into()),
             Self::InGameChanged { in_game: false } => ("info", "Background work resumed".into()),
+            Self::WeeklyReportReady { week, .. } => ("info", format!("AI weekly report ready (week of {week})")),
             _ => return None,
         })
     }
@@ -297,6 +308,12 @@ impl Engine {
                 }
                 if let Err(e) = checker.maybe_queue_session_review().await {
                     tracing::warn!(error = ?e, "session review check failed");
+                }
+                if let Err(e) = checker.maybe_queue_weekly_report().await {
+                    tracing::warn!(error = ?e, "weekly report check failed");
+                }
+                if let Err(e) = checker.refresh_stale_ranks().await {
+                    tracing::warn!(error = ?e, "rank refresh check failed");
                 }
             }
         });

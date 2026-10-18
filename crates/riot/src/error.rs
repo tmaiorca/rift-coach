@@ -19,6 +19,9 @@ pub enum RiotError {
     Http(#[from] reqwest::Error),
     #[error("could not decode response: {0}")]
     Decode(#[from] serde_json::Error),
+    /// A call made with arguments the API can't take.
+    #[error("{0}")]
+    Invalid(String),
 }
 
 impl RiotError {

@@ -2,7 +2,7 @@
 // last game's post-game status, nothing else.
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { LiveBoard, lastGameText, phaseText, useLiveState } from "./components/LiveBoard";
+import { BriefCard, LiveBoard, lastGameText, phaseText, useLiveState } from "./components/LiveBoard";
 import { ChampionsContext } from "./lib/assets";
 import type { ChampionEntry, LiveGameView } from "./types";
 
@@ -37,6 +37,9 @@ export function LiveWindow() {
           <span className="brand-mark">⬡</span>
           <span className={`pill live-${phase ?? "idle"}`}>{phaseText(live)}</span>
         </div>
+        {live?.brief && (live.phase === "loading" || live.phase === "in_game") && (
+          <BriefCard state={live} compact />
+        )}
         {board && live ? <LiveBoard state={live} compact /> : <p className="muted">Waiting for a game…</p>}
         {last?.ended_at && live?.phase !== "in_game" && (
           <div className="live-card">

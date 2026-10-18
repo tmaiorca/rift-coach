@@ -236,3 +236,145 @@ export function phaseText(state: LiveState | null): string {
       return "Game over.";
   }
 }
+
+const RECORD_LABEL: Record<string, string> = {
+  cs_10: "CS at 10",
+  cs_diff_10: "CS diff at 10",
+  gold_diff_15: "gold diff at 15",
+  deaths_pre14: "deaths before 14:00",
+  solo_deaths: "solo deaths",
+};
+
+function recordLine(r: { games: number; wins: number; averages: Record<string, number> }): string {
+  const avg = Object.entries(r.averages)
+    .map(([k, v]) => `${RECORD_LABEL[k] ?? k} ${k.includes("diff") && v > 0 ? "+" : ""}${v.toFixed(1)}`)
+    .join(", ");
+  return `${r.games} games, ${r.wins}W ${r.games - r.wins}L${avg ? ` · avg ${avg}` : ""}`;
+}
+
+/** The pre-game brief: static content from the loading screen (champions
+ * only), plus the optional AI game plan. */
+export function BriefCard({ state, compact = false }: { state: LiveState; compact?: boolean }) {
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
+  const b = state.brief;
+  if (!b) return null;
+  const brief = b.brief;
+  const patch = state.context?.patch ?? "latest";
+  const loading = state.phase === "loading";
+
+  const ask = async () => {
+    setAsking(true);
+    setAskError(null);
+    try {
+      await api.generateGamePlan();
+    } catch (e) {
+      setAskError(String(e));
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  return (
+    <div className={`live-card brief ${compact ? "compact" : ""}`}>
+      <div className="live-card-head">
+        <span>Game plan</span>
+        {brief && (
+          <span className="muted small-text">
+            {brief.champion}
+            {brief.role ? ` · ${brief.role.toLowerCase()}` : ""}
+          </span>
+        )}
+      </div>
+      {b.loading && <p className="muted small-text">Reading the champions in your game…</p>}
+      {!b.loading && !brief && <p className="muted small-text">{b.note ?? "No brief for this game."}</p>}
+      {brief && (
+        <>
+          {b.plan_status === "ready" && b.plan && (
+            <div className="plan">
+              <p className="small-text">
+                <b>{b.plan.summary}</b>
+              </p>
+              <ul className="small-text">
+                {b.plan.plan.map((p, i) => (
+                  <li key={i}>
+                    <b>{p.title}.</b> {p.detail}
+                  </li>
+                ))}
+                {b.plan.watch_out.map((p, i) => (
+                  <li key={`w${i}`} className="watch">
+                    <b>{p.title}.</b> {p.detail}
+                  </li>
+                ))}
+              </ul>
+              <p className="small-text">
+                Focus: <b>{b.plan.focus}</b>
+              </p>
+            </div>
+          )}
+          {b.plan_status === "generating" && <p className="muted small-text">✦ Writing your game plan…</p>}
+          {b.plan_status === "failed" && (
+            <p className="bad small-text">AI game plan failed: {b.plan_error}</p>
+          )}
+          {(b.plan_status === "off" || b.plan_status === "failed") && loading && (
+            <button className="small" disabled={asking} onClick={() => void ask()}>
+              ✦ Write an AI game plan
+            </button>
+          )}
+          {askError && <p className="bad small-text">{askError}</p>}
+
+          {brief.likely_opponent && (
+            <p className="small-text">
+              Likely lane opponent: <b>{brief.likely_opponent.champion}</b>{" "}
+              <span className="muted">
+                (plays {brief.role?.toLowerCase() ?? "your role"} in {brief.likely_opponent.role_share_pct}%
+                of stored games)
+              </span>
+              {brief.matchup ? (
+                <>
+                  <br />
+                  You vs them in lane: {recordLine(brief.matchup)}
+                </>
+              ) : (
+                <span className="muted"> · no games against them in lane yet</span>
+              )}
+            </p>
+          )}
+          {!compact && brief.record.games > 0 && (
+            <p className="small-text">
+              You on {brief.champion}: {recordLine(brief.record)}
+            </p>
+          )}
+          <div className="brief-enemies">
+            {brief.enemies.map((e) => (
+              <span key={e.champion_id} className="champ-chip" title={`${e.champion}: your games against`}>
+                <ChampionIcon id={e.champion_id} patch={patch} size={compact ? 22 : 26} />
+                <span className="small-text mono">{e.games ? `${e.wins}-${e.games - e.wins}` : "new"}</span>
+              </span>
+            ))}
+          </div>
+          {brief.reminders.length > 0 && (
+            <div className="small-text">
+              {brief.reminders.map((r) => (
+                <p key={r.id}>
+                  <b>Watch: {r.title}.</b> <span className="muted">{r.tip}</span>
+                </p>
+              ))}
+            </div>
+          )}
+          {!compact && brief.targets.length > 0 && (
+            <p className="small-text muted">
+              {brief.benchmark_label}:{" "}
+              {brief.targets
+                .map(
+                  (t) =>
+                    `${t.label} ${t.benchmark_median.toFixed(t.decimals)}${t.your_average != null ? ` (you ${t.your_average.toFixed(t.decimals)})` : ""}`,
+                )
+                .join(" · ")}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}

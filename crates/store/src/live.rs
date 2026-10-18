@@ -154,6 +154,12 @@ pub fn end(
     )? > 0)
 }
 
+/// The pre-game brief shown for this game (JSON).
+pub fn set_brief(conn: &Connection, id: i64, json: &str) -> Result<()> {
+    conn.execute("UPDATE live_games SET brief_json = ?2 WHERE id = ?1", params![id, json])?;
+    Ok(())
+}
+
 pub fn set_footprint(conn: &Connection, id: i64, json: &str) -> Result<()> {
     conn.execute("UPDATE live_games SET footprint_json = ?2 WHERE id = ?1", params![id, json])?;
     Ok(())

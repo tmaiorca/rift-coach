@@ -154,6 +154,12 @@ pub fn validate(report: &Value, facts: &Value) -> Validation {
         s.push("`confidence` must be \"low\", \"medium\" or \"high\".".into());
     }
 
+    check_numbers(report, facts, &mut out);
+    out
+}
+
+/// Every number and game time in the report's prose must come from the facts.
+fn check_numbers(report: &Value, facts: &Value, out: &mut Validation) {
     let mut allowed = Allowed { numbers: Vec::new(), times: HashSet::new() };
     collect(facts, &mut allowed);
     let mut prose = Vec::new();
@@ -183,6 +189,55 @@ pub fn validate(report: &Value, facts: &Value) -> Validation {
     bad.sort();
     bad.dedup();
     out.untraced_numbers = bad;
+}
+
+/// Checks a pre-game plan: `summary`, 2-4 `plan` items and 0-3 `watch_out`
+/// items (each with `title`, `detail`, `evidence`), a `focus`, a confidence,
+/// and traceable numbers.
+pub fn validate_plan(report: &Value, facts: &Value) -> Validation {
+    let mut out = Validation::default();
+    let ids: HashSet<String> = evidence_ids(facts).into_iter().collect();
+    if !report.is_object() {
+        out.structural.push("The reply must be a single JSON object.".into());
+        return out;
+    }
+    let s = &mut out.structural;
+    for key in ["summary", "focus"] {
+        if report[key].as_str().is_none_or(|x| x.trim().is_empty()) {
+            s.push(format!("`{key}` must be a non-empty string."));
+        }
+    }
+    for (key, min, max) in [("plan", 2, 4), ("watch_out", 0, 3)] {
+        let Some(items) = report[key].as_array() else {
+            s.push(format!("`{key}` must be an array."));
+            continue;
+        };
+        if items.len() < min || items.len() > max {
+            s.push(format!("`{key}` must have {min}-{max} items (has {}).", items.len()));
+        }
+        for (i, it) in items.iter().enumerate() {
+            for f in ["title", "detail"] {
+                if it[f].as_str().is_none_or(|x| x.trim().is_empty()) {
+                    s.push(format!("`{key}[{i}].{f}` must be a non-empty string."));
+                }
+            }
+            match it["evidence"].as_array() {
+                None => s.push(format!("`{key}[{i}].evidence` must be an array of fact ids.")),
+                Some(ev) => {
+                    for e in ev {
+                        let id = e.as_str().unwrap_or_default();
+                        if !ids.contains(id) {
+                            s.push(format!("`{key}[{i}].evidence` cites unknown fact id \"{id}\"."));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !matches!(report["confidence"].as_str(), Some("low" | "medium" | "high")) {
+        s.push("`confidence` must be \"low\", \"medium\" or \"high\".".into());
+    }
+    check_numbers(report, facts, &mut out);
     out
 }
 
@@ -213,6 +268,37 @@ mod tests {
             "confidence": "medium",
             "confidence_reason": "One game."
         })
+    }
+
+    #[test]
+    fn game_plan_format_and_numbers() {
+        let facts = json!({
+            "record": {"id": "record", "champion": "Leblanc", "your_recent_games": {"games": 12, "wins": 5}},
+            "matchup": {"id": "matchup", "likely_lane_opponent": "Vex"},
+            "enemies": [{"id": "enemy:Vex", "champion": "Vex", "your_games_against": 3}],
+            "patterns": [{"id": "pattern:solo_deaths", "title": "Losing 1v1s"}],
+            "benchmark_targets": {"metrics": [{"id": "bench:cs_10", "benchmark_median": 78.0}]}
+        });
+        let plan = json!({
+            "summary": "Play safe into Vex and farm toward 78 CS at 10.",
+            "plan": [
+                {"title": "Lane", "detail": "You've played Vex 3 times.", "evidence": ["matchup", "enemy:Vex"]},
+                {"title": "Farm", "detail": "Aim for 78 CS by 10:00.", "evidence": ["bench:cs_10"]}
+            ],
+            "watch_out": [{"title": "1v1s", "detail": "Avoid solo fights.", "evidence": ["pattern:solo_deaths"]}],
+            "focus": "Farm first.",
+            "confidence": "medium"
+        });
+        assert!(validate_plan(&plan, &facts).is_clean(), "{:?}", validate_plan(&plan, &facts));
+
+        let mut bad = plan.clone();
+        bad["plan"] = json!([{"title": "Only one", "detail": "You win 64% of lanes.", "evidence": ["record"]}]);
+        bad["focus"] = json!("");
+        let v = validate_plan(&bad, &facts);
+        assert_eq!(v.structural.len(), 2, "{:?}", v.structural);
+        assert_eq!(v.untraced_numbers, vec!["64".to_string()]);
+        // A review isn't a plan.
+        assert!(!validate(&plan, &facts).structural.is_empty());
     }
 
     #[test]

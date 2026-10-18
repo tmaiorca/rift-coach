@@ -31,6 +31,52 @@ pub struct LeagueEntryDto {
     pub puuid: Option<String>,
 }
 
+/// An apex ladder (Master and up).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeagueListDto {
+    #[serde(default)]
+    pub tier: String,
+    #[serde(default)]
+    pub entries: Vec<LeagueItemDto>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeagueItemDto {
+    #[serde(default)]
+    pub puuid: Option<String>,
+    #[serde(default)]
+    pub league_points: i32,
+}
+
+/// Spectator-V5 current game, reduced to what the pre-game brief may use:
+/// champions and teams. Other players' identities are not read.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveGameDto {
+    #[serde(default)]
+    pub game_id: i64,
+    #[serde(default)]
+    pub game_queue_config_id: i32,
+    #[serde(default)]
+    pub map_id: i32,
+    #[serde(default)]
+    pub participants: Vec<ActiveParticipantDto>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveParticipantDto {
+    #[serde(default)]
+    pub champion_id: i32,
+    #[serde(default)]
+    pub team_id: i32,
+    /// Only compared with the player's own PUUID to find their team.
+    #[serde(default)]
+    pub puuid: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChampionMasteryDto {

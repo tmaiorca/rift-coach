@@ -199,7 +199,23 @@ pub fn detail(
         })
         .collect();
 
-    let aggregates = SESSION_METRICS
+    let (aggregates, patterns) = summarize(&rift, &baseline);
+
+    Ok(SessionDetail {
+        report: reports::latest_for_scope(conn, SESSION, account_id, scope)?,
+        baseline_games: baseline.len(),
+        summary,
+        games,
+        aggregates,
+        patterns,
+    })
+}
+
+/// Averages of `period` games against `baseline` games, and the per-game
+/// rules that fired in the period (with their usual rate). Shared by
+/// sessions and weeks.
+pub(crate) fn summarize(rift: &[Game], baseline: &[Game]) -> (Vec<Aggregate>, Vec<SessionPattern>) {
+    let aggregates: Vec<Aggregate> = SESSION_METRICS
         .iter()
         .filter_map(|key| {
             let d = defs::get(key)?;
@@ -223,7 +239,7 @@ pub fn detail(
         })
         .collect();
 
-    let patterns = RULES
+    let patterns: Vec<SessionPattern> = RULES
         .iter()
         .filter_map(|r| {
             let considered: Vec<&Game> = rift.iter().filter(|g| (r.considered)(g)).collect();
@@ -245,12 +261,5 @@ pub fn detail(
         })
         .collect();
 
-    Ok(SessionDetail {
-        report: reports::latest_for_scope(conn, SESSION, account_id, scope)?,
-        baseline_games: baseline.len(),
-        summary,
-        games,
-        aggregates,
-        patterns,
-    })
+    (aggregates, patterns)
 }

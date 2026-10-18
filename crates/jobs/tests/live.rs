@@ -109,6 +109,29 @@ async fn live_game_holds_work_and_links_the_finished_match() {
         ))
         .mount(&riot)
         .await;
+    // The loading-screen brief reads champions and teams from Spectator-V5.
+    let participants: Vec<Value> = (1..=10)
+        .map(|i| {
+            json!({
+                "puuid": if i == 4 { "p-me".to_owned() } else { format!("p{i}") },
+                "riotId": format!("Someone{i}#NA1"),
+                "championId": if i == 4 { 103 } else { i * 10 },
+                "teamId": if i <= 5 { 100 } else { 200 },
+            })
+        })
+        .collect();
+    Mock::given(path("/lol/spectator/v5/active-games/by-summoner/p-me"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                json!({"gameId": 777, "gameQueueConfigId": 420, "mapId": 11, "participants": participants}),
+            ),
+        )
+        .mount(&riot)
+        .await;
+    Mock::given(path_regex(r"^/lol/league/v4/entries/by-puuid/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&riot)
+        .await;
     let ddragon = MockServer::start().await;
     Mock::given(path("/api/versions.json"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!(["16.20.1"])))
@@ -147,7 +170,7 @@ async fn live_game_holds_work_and_links_the_finished_match() {
     tokio::time::timeout(Duration::from_secs(10), engine.wait_idle()).await.expect("idle").expect("store");
 
     let mut events = engine.subscribe();
-    let mut rx = spawn_live(
+    let handle = spawn_live(
         engine.clone(),
         LiveConfig {
             url: live.uri(),
@@ -157,12 +180,19 @@ async fn live_game_holds_work_and_links_the_finished_match() {
         },
     )
     .expect("live");
+    let mut rx = handle.state.clone();
 
     // Loading screen: work is already held.
     wait_state(&mut rx, "loading", |s| s.phase == Phase::Loading).await;
     assert!(engine.in_game());
     engine.enqueue(Job::DdragonSync { patch: "16.20".into() }).await.expect("enqueue");
     tokio::time::sleep(Duration::from_millis(300)).await;
+    let s = wait_state(&mut rx, "brief", |s| s.brief.as_ref().is_some_and(|b| !b.loading)).await;
+    let b = s.brief.expect("brief state");
+    let brief = b.brief.expect("brief");
+    assert_eq!((brief.game_id, brief.champion_id), (777, 103));
+    assert_eq!(brief.enemies.len(), 5);
+    assert_eq!(b.plan_status, rc_jobs::PlanStatus::Off, "AI game plans are off by default");
     let status = engine.status().await.expect("status");
     assert!(status.in_game);
     assert_eq!(status.jobs.ready, 1, "queued work waits for the game to end");
@@ -219,4 +249,8 @@ async fn live_game_holds_work_and_links_the_finished_match() {
     assert!(row.footprint_json.is_some(), "footprint measured during the game");
     assert!(snapshots.len() >= 2, "{}", snapshots.len());
     assert!(!row.snapshots_pruned, "kept for 7 days by default");
+    let brief_json: Option<String> = db
+        .with(|c| Ok(c.query_row("SELECT brief_json FROM live_games WHERE id = ?1", [ready.1], |r| r.get(0))?))
+        .expect("q");
+    assert!(brief_json.is_some_and(|j| j.contains("777") && !j.contains("Someone")), "brief stored, no names");
 }

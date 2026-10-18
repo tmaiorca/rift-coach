@@ -66,6 +66,17 @@ enum Command {
         #[arg(long)]
         sessions: bool,
     },
+    /// Benchmark collection progress and your gaps to the benchmark tier;
+    /// `--collect N` first runs the collector for N minutes.
+    Benchmarks {
+        #[arg(long)]
+        collect: Option<u64>,
+        /// Role for the gaps (default: your main role).
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
+        champion: Option<String>,
+    },
     /// Save raw API responses to a gitignored folder for building fixtures.
     RecordFixtures {
         riot_id: RiotId,
@@ -159,6 +170,7 @@ async fn main() -> anyhow::Result<()> {
                 Command::Smoke { riot_id, platform } => smoke(&engine, &riot_id, platform).await,
                 Command::Analyze { match_id, games, facts } => analyze(&engine, match_id, games, facts).await,
                 Command::Patterns { games, role, sessions } => patterns(&engine, games, role, sessions).await,
+                Command::Benchmarks { collect, role, champion } => benchmarks(&engine, collect, role, champion).await,
                 Command::RecordFixtures { riot_id, platform, matches, out } => {
                     fixtures::record(engine.riot(), &riot_id, platform, matches, &out).await
                 }
@@ -249,6 +261,80 @@ async fn analyze(engine: &Arc<Engine>, match_id: Option<String>, games: u32, fac
             "  {:>5.0}s enemies={} pre14={} enemy_half={} gold_vs_opp={:?}",
             d.t_s, d.enemies_involved, d.before_14, d.in_enemy_half, d.gold_vs_opponent
         );
+    }
+    Ok(())
+}
+
+async fn benchmarks(
+    engine: &Arc<Engine>,
+    collect: Option<u64>,
+    role: Option<String>,
+    champion: Option<String>,
+) -> anyhow::Result<()> {
+    engine.start().await?;
+    if let Some(minutes) = collect {
+        let mut rx = rc_jobs::spawn_benchmarks(engine.clone(), rc_jobs::BenchConfig::default());
+        let until = tokio::time::Instant::now() + std::time::Duration::from_secs(minutes * 60);
+        println!("Collecting for {minutes} min...");
+        while tokio::time::timeout_at(until, rx.changed()).await.is_ok_and(|r| r.is_ok()) {
+            let s = rx.borrow_and_update().clone();
+            println!(
+                "  [{:?}] {}{}",
+                s.phase,
+                s.detail,
+                s.last_error.map(|e| format!(" (error: {e})")).unwrap_or_default()
+            );
+        }
+        engine.wait_idle().await?;
+    }
+    let (progress, gaps) = engine
+        .db()
+        .call(move |c| {
+            let account = rc_store::accounts::primary_account(c)?
+                .ok_or_else(|| rc_store::StoreError::Io(std::io::Error::other("no account tracked yet")))?;
+            let s = rc_store::settings::app(c)?;
+            let progress = rc_coach::benchmarks::progress(c, Some(account.id), &s)?;
+            let role = role.or_else(|| progress.focus.roles.first().cloned());
+            let gaps = match role {
+                Some(r) => Some(rc_coach::benchmarks::gaps(
+                    c,
+                    account.id,
+                    &s,
+                    &r,
+                    champion.as_deref(),
+                    rc_store::metrics::GameFilter { limit: s.baseline_games, ..Default::default() },
+                )?),
+                None => None,
+            };
+            Ok((progress, gaps))
+        })
+        .await?;
+    println!(
+        "Tier {} | patch {:?} | focus {:?} {:?}",
+        progress.tier_label, progress.patch, progress.focus.roles, progress.focus.champions
+    );
+    println!("Ladder: {:?}", progress.collector);
+    println!("Games by patch: {:?}", progress.games_by_patch);
+    for t in &progress.targets {
+        println!("  {:<24} {}/{}", t.label, t.samples, t.target);
+    }
+    if let Some(g) = gaps {
+        println!(
+            "
+Gaps vs {} ({} of your games):",
+            g.reference.as_deref().unwrap_or("(not enough benchmark data)"),
+            g.games
+        );
+        for x in &g.gaps {
+            println!(
+                "  {:<34} yours {:>8.2}  bench median {:>8.2}  better than {:>3.0}%{}",
+                x.label,
+                x.yours,
+                x.benchmark_median,
+                x.better_than_pct,
+                if x.early { "  (early)" } else { "" }
+            );
+        }
     }
     Ok(())
 }

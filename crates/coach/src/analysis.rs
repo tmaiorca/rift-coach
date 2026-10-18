@@ -2,7 +2,9 @@
 //! - **role players**: everyone else who played the same role in your stored
 //!   Summoner's Rift games (your lobbies, so roughly your skill bracket);
 //! - **your games**: your own previous games in that role (the baseline,
-//!   limited to the "look back" window).
+//!   limited to the "look back" window);
+//! - **benchmark**: players of the benchmark tier in that role (and on that
+//!   champion when there are enough), from collected higher-rank games.
 
 use rc_metrics::defs::{Group, METRICS, Unit};
 use rc_metrics::percentile::{Comparison, compare};
@@ -32,6 +34,10 @@ pub struct MetricView {
     pub vs_champion: Option<Comparison>,
     /// vs your own previous games in this role.
     pub vs_personal: Option<Comparison>,
+    /// vs benchmark-tier players in this role.
+    pub vs_benchmark: Option<Comparison>,
+    /// vs benchmark-tier players on this champion in this role.
+    pub vs_benchmark_champion: Option<Comparison>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,6 +48,9 @@ pub struct Populations {
     pub champion_label: String,
     pub personal_label: String,
     pub baseline_games: u32,
+    /// e.g. "Diamond mid laners, patch 16.20" (None until collected).
+    pub benchmark_label: Option<String>,
+    pub benchmark_champion_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +83,17 @@ pub fn compare_metrics(
         ),
         None => Default::default(),
     };
+    let (bench_role, bench_champ) = match role {
+        Some(r) => {
+            let tier = rc_store::settings::app(conn)?.benchmarks.tier;
+            let patch = rc_store::matches::patch_of_match(conn, match_id)?;
+            crate::benchmarks::populations(conn, &tier, patch.as_deref(), r, Some(champion_name))?
+        }
+        None => (None, None),
+    };
+    let empty = store_metrics::Population::new();
+    let bench_role_pop = bench_role.as_ref().map_or(&empty, |b| &b.pop);
+    let bench_champ_pop = bench_champ.as_ref().map_or(&empty, |b| &b.pop);
     let metrics = METRICS
         .iter()
         .filter_map(|d| {
@@ -95,6 +115,12 @@ pub fn compare_metrics(
                 vs_role: if d.zero_sum { None } else { cmp(&role_pop, 1) },
                 vs_champion: if d.zero_sum { None } else { cmp(&champ_pop, MIN_CHAMPION_SAMPLE) },
                 vs_personal: cmp(&personal, 3),
+                vs_benchmark: if d.zero_sum { None } else { cmp(bench_role_pop, crate::benchmarks::MIN_ROLE_SAMPLE) },
+                vs_benchmark_champion: if d.zero_sum {
+                    None
+                } else {
+                    cmp(bench_champ_pop, crate::benchmarks::MIN_CHAMPION_SAMPLE)
+                },
             })
         })
         .collect();
@@ -107,6 +133,8 @@ pub fn compare_metrics(
             champion_label: format!("{champion_name} {rl} in your games"),
             personal_label: format!("your last {baseline_games} games in this role"),
             baseline_games,
+            benchmark_label: bench_role.map(|b| b.label),
+            benchmark_champion_label: bench_champ.map(|b| b.label),
         },
         metrics,
     })

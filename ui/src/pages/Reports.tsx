@@ -1,18 +1,42 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { dateTime } from "../lib/format";
-import type { Report } from "../types";
+import type { GamePlan, Report } from "../types";
 
-const KIND: Record<string, string> = { post_game: "game", session: "session" };
+function PlanItems({ output }: { output: GamePlan }) {
+  return (
+    <ul>
+      {[...(output.plan ?? []), ...(output.watch_out ?? [])].map((p, i) => (
+        <li key={i}>
+          <b>{p.title}</b>: {p.detail}
+        </li>
+      ))}
+      {output.focus && (
+        <li>
+          <span className="muted">Focus:</span> {output.focus}
+        </li>
+      )}
+    </ul>
+  );
+}
+
+const KIND: Record<string, string> = {
+  post_game: "game",
+  session: "session",
+  weekly: "week",
+  pregame: "game plan",
+};
 
 export function Reports({
   refreshKey,
   onOpenMatch,
   onOpenSession,
+  onOpenWeek,
 }: {
   refreshKey: number;
   onOpenMatch: (id: string) => void;
   onOpenSession: (scope: string) => void;
+  onOpenWeek: (week: string) => void;
 }) {
   const [reports, setReports] = useState<Report[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +104,15 @@ export function Reports({
                   Open session
                 </button>
               )}
+              {r.scope && r.kind === "weekly" && (
+                <button
+                  className="secondary small"
+                  onClick={() => onOpenWeek(r.scope!.replace(/^week:/, ""))}
+                >
+                  Open week
+                </button>
+              )}
+              {r.kind === "pregame" && <PlanItems output={r.output as unknown as GamePlan} />}
             </div>
           </details>
         ))}

@@ -14,12 +14,16 @@ use crate::CoachError;
 use crate::analysis::compare_metrics;
 use crate::detail::{POST_GAME, load};
 use crate::sessions::SESSION;
-use crate::validate::validate;
+use crate::validate::{validate, validate_plan};
 
-pub const PROMPT_VERSION: &str = "post_game_review.v2";
-const PROMPT: &str = include_str!("../../../prompts/post_game_review.v2.md");
+pub const PROMPT_VERSION: &str = "post_game_review.v3";
+const PROMPT: &str = include_str!("../../../prompts/post_game_review.v3.md");
 pub const SESSION_PROMPT_VERSION: &str = "session_review.v1";
 const SESSION_PROMPT: &str = include_str!("../../../prompts/session_review.v1.md");
+pub const PREGAME_PROMPT_VERSION: &str = "pregame_brief.v1";
+const PREGAME_PROMPT: &str = include_str!("../../../prompts/pregame_brief.v1.md");
+pub const WEEKLY_PROMPT_VERSION: &str = "weekly_report.v1";
+const WEEKLY_PROMPT: &str = include_str!("../../../prompts/weekly_report.v1.md");
 
 /// The token cap counts reports from this far back.
 pub const USAGE_WINDOW_MS: i64 = 30 * 24 * 3600 * 1000;
@@ -149,6 +153,7 @@ pub async fn post_game_review(
             prompt_version: PROMPT_VERSION,
             intro: "Facts for the game to review:",
             facts,
+            plan: false,
         },
         opts,
     )
@@ -182,6 +187,92 @@ pub async fn session_review(
             prompt_version: SESSION_PROMPT_VERSION,
             intro: "Facts for the session to review:",
             facts,
+            plan: false,
+        },
+        opts,
+    )
+    .await
+}
+
+/// Facts for a weekly report.
+pub async fn weekly_facts(db: &Db, account_id: i64, week: &str) -> Result<Value, CoachError> {
+    let week = week.to_owned();
+    db.call(move |c| {
+        Ok((|| {
+            let settings = rc_store::settings::app(c)?;
+            let d = crate::weekly::detail(c, account_id, &week, &settings, rc_common::time::now_ms())?;
+            if d.summary.rift_games == 0 {
+                return Err(CoachError::Invalid("This week has no Summoner's Rift games to report on.".into()));
+            }
+            let goals = crate::goals::list(c, account_id, false)?;
+            Ok(crate::facts::weekly(&d, &goals))
+        })())
+    })
+    .await?
+}
+
+pub async fn weekly_report(
+    db: &Db,
+    ai: &AiClient,
+    account_id: i64,
+    week: &str,
+    opts: &ReviewOptions,
+) -> Result<Report, CoachError> {
+    let scope = crate::weekly::scope_of(week);
+    if !opts.force {
+        let s = scope.clone();
+        let cached = db.call(move |c| reports::latest_for_scope(c, crate::weekly::WEEKLY, account_id, &s)).await?;
+        if let Some(r) = cached.filter(|r| is_current(r, ai, WEEKLY_PROMPT_VERSION)) {
+            return Ok(r);
+        }
+    }
+    let facts = weekly_facts(db, account_id, week).await?;
+    generate(
+        db,
+        ai,
+        Spec {
+            kind: crate::weekly::WEEKLY,
+            account_id,
+            match_id: None,
+            scope: Some(scope),
+            prompt: WEEKLY_PROMPT,
+            prompt_version: WEEKLY_PROMPT_VERSION,
+            intro: "Facts for the week to report on:",
+            facts,
+            plan: false,
+        },
+        opts,
+    )
+    .await
+}
+
+/// The AI game plan for a pre-game brief (one per game; reused if it exists).
+pub async fn pregame_plan(
+    db: &Db,
+    ai: &AiClient,
+    account_id: i64,
+    brief: &crate::pregame::Brief,
+    opts: &ReviewOptions,
+) -> Result<Report, CoachError> {
+    let scope = crate::pregame::scope_of(brief.game_id);
+    let s = scope.clone();
+    let cached = db.call(move |c| reports::latest_for_scope(c, crate::pregame::PREGAME, account_id, &s)).await?;
+    if let Some(r) = cached.filter(|r| is_current(r, ai, PREGAME_PROMPT_VERSION)) {
+        return Ok(r);
+    }
+    generate(
+        db,
+        ai,
+        Spec {
+            kind: crate::pregame::PREGAME,
+            account_id,
+            match_id: None,
+            scope: Some(scope),
+            prompt: PREGAME_PROMPT,
+            prompt_version: PREGAME_PROMPT_VERSION,
+            intro: "Facts for the game that is loading:",
+            facts: crate::pregame::facts(brief),
+            plan: true,
         },
         opts,
     )
@@ -219,6 +310,8 @@ struct Spec {
     prompt_version: &'static str,
     intro: &'static str,
     facts: Value,
+    /// A pre-game plan (its own format) rather than a review.
+    plan: bool,
 }
 
 async fn generate(db: &Db, ai: &AiClient, spec: Spec, opts: &ReviewOptions) -> Result<Report, CoachError> {
@@ -235,7 +328,7 @@ async fn generate(db: &Db, ai: &AiClient, spec: Spec, opts: &ReviewOptions) -> R
         tokens_in += completion.input_tokens.unwrap_or(0);
         tokens_out += completion.output_tokens.unwrap_or(0);
         let parsed = extract_json(&completion.text).unwrap_or(Value::Null);
-        let v = validate(&parsed, &spec.facts);
+        let v = if spec.plan { validate_plan(&parsed, &spec.facts) } else { validate(&parsed, &spec.facts) };
         tracing::info!(
             kind = spec.kind,
             attempt,

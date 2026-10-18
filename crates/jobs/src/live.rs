@@ -6,15 +6,19 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use rc_coach::pregame::Brief;
 use rc_common::time::now_ms;
 use rc_live::footprint::{Footprint, Sampler};
 use rc_live::view::{self, BuildProgress, GoalLive, LiveContext, Marks, Pacing};
 use rc_live::{EndReason, LiveClient, LiveError, OwnSnapshot, Phase, Tracker, Transition};
 use rc_metrics::ItemCatalog;
+use rc_riot::Platform;
+use rc_riot::dto::ActiveGameDto;
 use rc_store::live::NewLiveGame;
 use rc_store::settings::LiveSettings;
 use serde::Serialize;
-use tokio::sync::watch;
+use serde_json::Value;
+use tokio::sync::{mpsc, watch};
 
 use crate::engine::Engine;
 use crate::job::Job;
@@ -67,7 +71,52 @@ pub struct LiveState {
     pub build: Option<BuildProgress>,
     pub goals: Vec<GoalLive>,
     pub footprint: Option<Footprint>,
+    /// The pre-game brief (built at the loading screen; static for the game).
+    pub brief: Option<BriefState>,
     pub updated_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStatus {
+    /// Automatic game plans are off (one can be requested on the loading screen).
+    Off,
+    Generating,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BriefState {
+    /// `None` while loading or when unavailable (see `note`).
+    pub brief: Option<Brief>,
+    pub loading: bool,
+    pub note: Option<String>,
+    pub account_id: Option<i64>,
+    pub plan_status: PlanStatus,
+    /// The AI game plan (validated JSON), when ready.
+    pub plan: Option<Value>,
+    pub plan_report_id: Option<i64>,
+    pub plan_error: Option<String>,
+}
+
+/// Requests from the UI.
+#[derive(Debug, Clone, Copy)]
+pub enum LiveCommand {
+    /// Write the AI game plan now (only honored on the loading screen).
+    GeneratePlan,
+}
+
+/// The poller's outputs and inputs.
+#[derive(Debug, Clone)]
+pub struct LiveHandle {
+    pub state: watch::Receiver<LiveState>,
+    pub commands: mpsc::Sender<LiveCommand>,
+}
+
+enum BriefMsg {
+    Brief(Result<(i64, Box<Brief>), String>),
+    Plan(Result<(i64, Value), String>),
 }
 
 /// A recorded live game for the UI, with where its post-game analysis is.
@@ -134,13 +183,23 @@ struct Poller {
     settings: LiveSettings,
     settings_at: Option<Instant>,
     tx: watch::Sender<LiveState>,
+    brief: Option<BriefState>,
+    brief_tx: mpsc::UnboundedSender<BriefMsg>,
+    brief_rx: mpsc::UnboundedReceiver<BriefMsg>,
+    commands: mpsc::Receiver<LiveCommand>,
 }
 
-/// Starts the poller. The receiver always holds the newest [`LiveState`].
-pub fn spawn_live(engine: Arc<Engine>, config: LiveConfig) -> Result<watch::Receiver<LiveState>, LiveError> {
+/// Starts the poller. `state` always holds the newest [`LiveState`].
+pub fn spawn_live(engine: Arc<Engine>, config: LiveConfig) -> Result<LiveHandle, LiveError> {
     let client = LiveClient::new(&config.url)?;
     let (tx, rx) = watch::channel(LiveState::default());
+    let (brief_tx, brief_rx) = mpsc::unbounded_channel();
+    let (cmd_tx, commands) = mpsc::channel(8);
     let poller = Poller {
+        brief: None,
+        brief_tx,
+        brief_rx,
+        commands,
         engine,
         client,
         config,
@@ -151,7 +210,65 @@ pub fn spawn_live(engine: Arc<Engine>, config: LiveConfig) -> Result<watch::Rece
         tx,
     };
     tokio::spawn(poller.run_loop());
-    Ok(rx)
+    Ok(LiveHandle { state: rx, commands: cmd_tx })
+}
+
+/// Finds the player's current game (Spectator-V5) among tracked accounts and
+/// builds the brief. Only champions and teams are read from it.
+async fn build_brief(engine: Arc<Engine>) -> Result<(i64, Box<Brief>), String> {
+    let candidates = engine
+        .db
+        .call(|c| {
+            let settings = rc_store::settings::app(c)?;
+            let mut out = Vec::new();
+            for a in rc_store::accounts::list_accounts(c)? {
+                if let Some(p) = rc_store::accounts::current_puuid(c, a.id)? {
+                    let first = settings.active_account_id == Some(a.id)
+                        || (settings.active_account_id.is_none() && a.is_primary);
+                    out.push((first, a.id, a.platform, p));
+                }
+            }
+            out.sort_by_key(|x| !x.0);
+            Ok(out)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    for (_, account_id, platform, puuid) in candidates {
+        let Ok(platform) = platform.parse::<Platform>() else { continue };
+        let raw = match engine.riot.active_game_raw(platform, &puuid).await {
+            Ok(Some(r)) => r,
+            Ok(None) => continue,
+            Err(e) => return Err(format!("Spectator: {e}")),
+        };
+        let game: ActiveGameDto = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
+        let Some(me) = game.participants.iter().find(|p| p.puuid.as_deref() == Some(puuid.as_str())) else {
+            continue;
+        };
+        let input = rc_coach::pregame::BriefInput {
+            account_id,
+            game_id: game.game_id,
+            champion_id: me.champion_id,
+            enemies: game.participants.iter().filter(|p| p.team_id != me.team_id).map(|p| p.champion_id).collect(),
+        };
+        let brief = engine
+            .db
+            .call(move |c| Ok(rc_coach::pregame::brief(c, &input)))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        return Ok((account_id, Box::new(brief)));
+    }
+    Err("None of your tracked Riot IDs is in a game Riot can see yet".into())
+}
+
+async fn build_plan(engine: Arc<Engine>, account_id: i64, brief: Brief) -> Result<(i64, Value), String> {
+    let settings = engine.db.call(|c| rc_store::settings::app(c)).await.map_err(|e| e.to_string())?;
+    let client = rc_coach::provider::client_from_settings(&settings.ai).map_err(|e| e.to_string())?;
+    let opts = rc_coach::review::ReviewOptions::from_settings(&settings, false);
+    let report = rc_coach::review::pregame_plan(&engine.db, &client, account_id, &brief, &opts)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok((report.id, report.output))
 }
 
 impl Poller {
@@ -184,6 +301,7 @@ impl Poller {
                 tokio::time::sleep(self.cap(DISABLED_POLL)).await;
                 continue;
             }
+            self.drain_messages().await;
             let obs = self.client.poll().await;
             let transitions = self.tracker.observe(now_ms(), obs);
             let changed = !transitions.is_empty();
@@ -211,8 +329,20 @@ impl Poller {
             Transition::Phase(p) => {
                 tracing::info!(phase = ?p, "live phase");
                 self.engine.set_in_game(p.is_playing() && self.settings.pause_background);
+                match p {
+                    Phase::Loading => self.start_brief(true).await,
+                    Phase::Idle => self.brief = None,
+                    Phase::InGame | Phase::Ended => {}
+                }
             }
-            Transition::Started { started_at_ms, snapshot } => self.start(started_at_ms, &snapshot).await?,
+            Transition::Started { started_at_ms, snapshot } => {
+                self.start(started_at_ms, &snapshot).await?;
+                // App opened mid-game: the brief, but no AI plan once the game runs.
+                if self.brief.is_none() {
+                    self.start_brief(false).await;
+                }
+                self.save_brief().await;
+            }
             Transition::Ended { reason, last } => self.end(reason, &last).await?,
         }
         Ok(())
@@ -363,10 +493,117 @@ impl Poller {
         Ok(())
     }
 
+    async fn start_brief(&mut self, allow_plan: bool) {
+        if self.brief.is_some() {
+            return;
+        }
+        let auto =
+            allow_plan && self.engine.db.call(|c| rc_store::settings::app(c)).await.is_ok_and(|s| s.ai.auto_pregame);
+        self.brief = Some(BriefState {
+            brief: None,
+            loading: true,
+            note: None,
+            account_id: None,
+            plan_status: if auto { PlanStatus::Generating } else { PlanStatus::Off },
+            plan: None,
+            plan_report_id: None,
+            plan_error: None,
+        });
+        let (engine, tx) = (self.engine.clone(), self.brief_tx.clone());
+        tokio::spawn(async move {
+            let _ = tx.send(BriefMsg::Brief(build_brief(engine).await));
+        });
+        self.publish();
+    }
+
+    fn start_plan(&mut self) {
+        let Some(b) = &mut self.brief else { return };
+        let (Some(brief), Some(account_id)) = (b.brief.clone(), b.account_id) else { return };
+        b.plan_status = PlanStatus::Generating;
+        b.plan_error = None;
+        let (engine, tx) = (self.engine.clone(), self.brief_tx.clone());
+        tokio::spawn(async move {
+            let _ = tx.send(BriefMsg::Plan(build_plan(engine, account_id, brief).await));
+        });
+    }
+
+    /// Applies finished brief and plan work, and UI requests.
+    async fn drain_messages(&mut self) {
+        let mut changed = false;
+        while let Ok(cmd) = self.commands.try_recv() {
+            match cmd {
+                LiveCommand::GeneratePlan => {
+                    let can = self.tracker.phase() == Phase::Loading
+                        && self.brief.as_ref().is_some_and(|b| {
+                            b.brief.is_some() && matches!(b.plan_status, PlanStatus::Off | PlanStatus::Failed)
+                        });
+                    if can {
+                        self.start_plan();
+                        changed = true;
+                    }
+                }
+            }
+        }
+        while let Ok(msg) = self.brief_rx.try_recv() {
+            let Some(b) = &mut self.brief else { continue };
+            changed = true;
+            match msg {
+                BriefMsg::Brief(Ok((account_id, brief))) => {
+                    tracing::info!(game_id = brief.game_id, "pre-game brief ready");
+                    b.loading = false;
+                    b.account_id = Some(account_id);
+                    b.brief = Some(*brief);
+                    let plan = b.plan_status == PlanStatus::Generating;
+                    if plan {
+                        self.start_plan();
+                    }
+                    self.engine.emit(crate::engine::EngineEvent::PregameReady {
+                        live_game_id: self.run.as_ref().map(|r| r.live_game_id),
+                    });
+                    self.save_brief().await;
+                }
+                BriefMsg::Brief(Err(e)) => {
+                    tracing::info!(reason = %e, "no pre-game brief");
+                    b.loading = false;
+                    b.note = Some(e);
+                    if b.plan_status == PlanStatus::Generating {
+                        b.plan_status = PlanStatus::Off;
+                    }
+                }
+                BriefMsg::Plan(Ok((report_id, plan))) => {
+                    b.plan_status = PlanStatus::Ready;
+                    b.plan = Some(plan);
+                    b.plan_report_id = Some(report_id);
+                }
+                BriefMsg::Plan(Err(e)) => {
+                    tracing::warn!(error = %e, "AI game plan failed");
+                    b.plan_status = PlanStatus::Failed;
+                    b.plan_error = Some(e);
+                }
+            }
+        }
+        if changed {
+            self.publish();
+        }
+    }
+
+    /// Stores the brief with the recorded game, once both exist.
+    async fn save_brief(&self) {
+        let (Some(run), Some(Some(brief))) = (&self.run, self.brief.as_ref().map(|b| b.brief.as_ref())) else {
+            return;
+        };
+        let Ok(json) = serde_json::to_string(brief) else { return };
+        let id = run.live_game_id;
+        if let Err(e) = self.engine.db.call(move |c| rc_store::live::set_brief(c, id, &json)).await {
+            tracing::warn!(error = %e, "could not store the pre-game brief");
+        }
+    }
+
     fn publish(&self) {
         let phase = self.tracker.phase();
         let snapshot = self.tracker.last().cloned().filter(|_| phase != Phase::Idle);
-        let mut state = LiveState { enabled: true, phase, updated_ms: now_ms(), ..Default::default() };
+        let mut state =
+            LiveState { enabled: true, phase, brief: self.brief.clone(), updated_ms: now_ms(), ..Default::default() };
         if let (Some(run), Some(s)) = (&self.run, &snapshot) {
             state.live_game_id = Some(run.live_game_id);
             state.tracked = run.account_id.is_some();

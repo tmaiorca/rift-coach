@@ -41,6 +41,7 @@ export function Settings({ settings, status, onSave, onKeyChanged }: Props) {
       <RiotKey status={status} onChanged={onKeyChanged} />
       <AiSection settings={settings} save={save} />
       <LiveSection settings={settings} save={save} />
+      <BenchmarkSection settings={settings} save={save} />
       <DataSection settings={settings} save={save} status={status} />
       <Appearance settings={settings} save={save} />
     </div>
@@ -286,10 +287,22 @@ function AiSection({ settings, save }: { settings: AppSettings; save: Save }) {
         checked={ai.auto_session}
         onChange={(v) => save((s) => ({ ...s, ai: { ...s.ai, auto_session: v } }))}
       />
+      <Toggle
+        label="Automatically write a weekly report"
+        hint="After each week (Monday to Sunday) with 3+ Summoner's Rift games, a report on the week's trends. Checked every 10 minutes."
+        checked={ai.auto_weekly}
+        onChange={(v) => save((s) => ({ ...s, ai: { ...s.ai, auto_weekly: v } }))}
+      />
+      <Toggle
+        label="Write an AI game plan at the loading screen"
+        hint="A short, static plan from the champions in your game and your own history. Written once on the loading screen, never updated during the game."
+        checked={ai.auto_pregame}
+        onChange={(v) => save((s) => ({ ...s, ai: { ...s.ai, auto_pregame: v } }))}
+      />
       <TokenCap settings={settings} save={save} />
       <p className="muted small-text">
-        On-demand reviews are always available from any match and on the Sessions page. Weekly reports arrive
-        in a later phase; every report is kept on the AI reports page.
+        On-demand reviews are always available from any match and on the Sessions and Weekly pages, and a game
+        plan can be requested on the loading screen. Every report is kept on the AI reports page.
       </p>
       <div className="form-row">
         <button
@@ -344,6 +357,106 @@ function TokenCap({ settings, save }: { settings: AppSettings; save: Save }) {
         until older ones age out. Leave empty for no cap.
       </span>
     </div>
+  );
+}
+
+const TIERS: { id: AppSettings["benchmarks"]["tier"]; label: string }[] = [
+  { id: "EMERALD", label: "Emerald" },
+  { id: "DIAMOND", label: "Diamond" },
+  { id: "MASTER", label: "Master and above" },
+];
+
+function BenchmarkSection({ settings, save }: { settings: AppSettings; save: Save }) {
+  const champs = useContext(ChampionsContext);
+  const list = [...champs.values()].sort((x, y) => x.name.localeCompare(y.name));
+  const b = settings.benchmarks;
+  const setB = (patch: Partial<AppSettings["benchmarks"]>) =>
+    save((s) => ({ ...s, benchmarks: { ...s.benchmarks, ...patch } }));
+  return (
+    <section className="panel">
+      <h2>Benchmarks</h2>
+      <Toggle
+        label="Collect higher-rank games in the background"
+        hint="Never during a game or while your own games download. Uses well under half of your Riot key's rate limit."
+        checked={b.enabled}
+        onChange={(v) => setB({ enabled: v })}
+      />
+      <div className="field">
+        <label>Compare with</label>
+        <select value={b.tier} onChange={(e) => setB({ tier: e.target.value as typeof b.tier })}>
+          {TIERS.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+        <span className="muted small-text">
+          Changing it starts a new sample; games already collected for the old tier stay until they age out.
+        </span>
+      </div>
+      <div className="field">
+        <label>Champions to sample first</label>
+        <div className="form-row">
+          <select
+            value=""
+            onChange={(e) =>
+              e.target.value && setB({ champions: [...b.champions, e.target.value].slice(0, 3) })
+            }
+            disabled={b.champions.length >= 3}
+          >
+            <option value="">{b.champions.length >= 3 ? "Up to 3" : "Add a champion…"}</option>
+            {list
+              .filter((c) => !b.champions.includes(c.id))
+              .map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+          </select>
+          {b.champions.map((c) => (
+            <button
+              key={c}
+              className="secondary small"
+              onClick={() => setB({ champions: b.champions.filter((x) => x !== c) })}
+            >
+              {c} ✕
+            </button>
+          ))}
+        </div>
+        <span className="muted small-text">Empty = your most played (5+ games in your last 50).</span>
+      </div>
+      <div className="field">
+        <label>
+          Pace: <b>one step every {b.step_seconds} s</b>
+        </label>
+        <input
+          type="range"
+          min={2}
+          max={30}
+          step={1}
+          value={b.step_seconds}
+          onChange={(e) => setB({ step_seconds: Number(e.target.value) })}
+        />
+        <span className="muted small-text">
+          Each step makes 1-2 Riot calls. Slower leaves more room for other tools using your key.
+        </span>
+      </div>
+      <div className="field">
+        <label>
+          Keep up to <b>{b.max_games.toLocaleString()} games</b> (about{" "}
+          {Math.round((b.max_games * 60) / 1024)} MB)
+        </label>
+        <input
+          type="range"
+          min={500}
+          max={10000}
+          step={500}
+          value={b.max_games}
+          onChange={(e) => setB({ max_games: Number(e.target.value) })}
+        />
+        <span className="muted small-text">Only the two newest patches are kept either way.</span>
+      </div>
+    </section>
   );
 }
 

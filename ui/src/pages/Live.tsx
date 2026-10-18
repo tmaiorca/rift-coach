@@ -1,6 +1,6 @@
 import { useContext, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { LiveBoard, lastGameText, phaseText, useLiveState } from "../components/LiveBoard";
+import { BriefCard, LiveBoard, lastGameText, phaseText, useLiveState } from "../components/LiveBoard";
 import { ChampionsContext, ItemIcon } from "../lib/assets";
 import { ago, clock, dateTime } from "../lib/format";
 import type { BuildPlanView, LiveGameView, PlannerItem, StatusView } from "../types";
@@ -43,6 +43,7 @@ export function Live({ status, refreshKey, defaultChampion, onOpenMatch, onOpenS
             Turn on live game detection in <a onClick={onOpenSettings}>Settings → Live</a>.
           </p>
         )}
+        {live?.brief && (live.phase === "loading" || live.phase === "in_game") && <BriefCard state={live} />}
         {showBoard && live ? (
           <>
             {!live.tracked && (

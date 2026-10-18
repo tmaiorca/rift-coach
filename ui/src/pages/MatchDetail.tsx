@@ -285,6 +285,13 @@ function MetricsPanel({ d }: { d: Detail }) {
             <th title={`Your previous games in this role (look-back window: ${pops.baseline_games})`}>
               vs {pops.personal_label}
             </th>
+            <th title="Higher-ranked players in this role (or on this champion, when enough were collected)">
+              {pops.benchmark_champion_label
+                ? `vs ${pops.benchmark_champion_label}`
+                : pops.benchmark_label
+                  ? `vs ${pops.benchmark_label}`
+                  : "vs higher ranks"}
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -293,7 +300,7 @@ function MetricsPanel({ d }: { d: Detail }) {
           ))}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={4} className="muted">
+              <td colSpan={5} className="muted">
                 Not available for this game{d.series ? "" : " (no timeline stored)"}.
               </td>
             </tr>
@@ -303,7 +310,8 @@ function MetricsPanel({ d }: { d: Detail }) {
       <p className="muted small-text">
         "Better than X%" compares with other players in your own games, mostly your lane opponents (roughly
         your skill bracket). Lane diffs are only compared with your own games, since your opponents' diffs
-        mirror yours. Higher-rank benchmarks arrive in Phase 5.
+        mirror yours. The last column compares with higher-ranked players collected in the background
+        (Benchmarks page); it fills in as games are collected.
       </p>
     </section>
   );
@@ -340,6 +348,13 @@ function MetricRow({ m }: { m: MetricView }) {
       </td>
       <td>
         <Pct c={m.vs_personal} fmt={fmt} direction={m.higher_is_better} />
+      </td>
+      <td>
+        {m.zero_sum ? (
+          <span className="muted">-</span>
+        ) : (
+          <Pct c={m.vs_benchmark_champion ?? m.vs_benchmark} fmt={fmt} direction={m.higher_is_better} />
+        )}
       </td>
     </tr>
   );

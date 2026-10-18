@@ -140,6 +140,8 @@ export interface MetricView {
   vs_role: Comparison | null;
   vs_champion: Comparison | null;
   vs_personal: Comparison | null;
+  vs_benchmark: Comparison | null;
+  vs_benchmark_champion: Comparison | null;
 }
 
 export interface Populations {
@@ -149,6 +151,9 @@ export interface Populations {
   champion_label: string;
   personal_label: string;
   baseline_games: number;
+  /** e.g. "Diamond mid laners, patch 16.20"; null until benchmarks are collected. */
+  benchmark_label: string | null;
+  benchmark_champion_label: string | null;
 }
 
 export interface ScoreRow {
@@ -332,6 +337,8 @@ export interface AppSettings {
     base_url: string | null;
     auto_post_game: boolean;
     auto_session: boolean;
+    auto_weekly: boolean;
+    auto_pregame: boolean;
     max_tokens: number;
     monthly_token_limit: number | null;
   };
@@ -340,6 +347,13 @@ export interface AppSettings {
     background_intensity: number;
     background_champion: string | null;
     particles: boolean;
+  };
+  benchmarks: {
+    enabled: boolean;
+    tier: BenchmarkTier;
+    champions: string[];
+    step_seconds: number;
+    max_games: number;
   };
   live: {
     enabled: boolean;
@@ -365,12 +379,14 @@ export type EngineEvent =
   | { type: "timeline_stored"; match_id: string }
   | { type: "key_status_changed"; status: KeyStatus }
   | { type: "key_generation_changed"; key_gen_id: number }
-  | { type: "metrics_computed"; match_id: string }
+  | { type: "metrics_computed"; match_id: string; benchmark: boolean }
   | { type: "review_ready"; match_id: string; report_id: number }
   | { type: "session_review_ready"; scope: string; report_id: number }
   | { type: "live_game_linked"; live_game_id: number; match_id: string }
   | { type: "post_game_ready"; live_game_id: number; match_id: string; review_queued: boolean }
-  | { type: "in_game_changed"; in_game: boolean };
+  | { type: "in_game_changed"; in_game: boolean }
+  | { type: "weekly_report_ready"; week: string; report_id: number }
+  | { type: "pregame_ready"; live_game_id: number | null };
 
 // ---------- patterns (rc-signals via rc-coach) ----------
 
@@ -696,7 +712,153 @@ export interface LiveState {
   build: BuildProgress | null;
   goals: GoalLive[];
   footprint: Footprint | null;
+  brief: BriefState | null;
   updated_ms: number;
+}
+
+export interface BriefRecord {
+  games: number;
+  wins: number;
+  averages: Record<string, number>;
+}
+
+export interface Brief {
+  game_id: number;
+  champion: string;
+  champion_id: number;
+  role: string | null;
+  record: BriefRecord;
+  likely_opponent: { champion: string; champion_id: number; role_share_pct: number } | null;
+  matchup: BriefRecord | null;
+  enemies: { champion: string; champion_id: number; games: number; wins: number }[];
+  reminders: { id: string; title: string; detail: string; tip: string }[];
+  goals: string[];
+  benchmark_label: string | null;
+  targets: {
+    metric: string;
+    label: string;
+    benchmark_median: number;
+    your_average: number | null;
+    decimals: number;
+  }[];
+}
+
+export interface GamePlanItem {
+  title: string;
+  detail: string;
+  evidence: string[];
+}
+
+export interface GamePlan {
+  summary: string;
+  plan: GamePlanItem[];
+  watch_out: GamePlanItem[];
+  focus: string;
+  confidence: "low" | "medium" | "high";
+  confidence_reason?: string;
+}
+
+export interface BriefState {
+  brief: Brief | null;
+  loading: boolean;
+  note: string | null;
+  account_id: number | null;
+  plan_status: "off" | "generating" | "ready" | "failed";
+  plan: GamePlan | null;
+  plan_report_id: number | null;
+  plan_error: string | null;
+}
+
+// ---------- benchmarks, ranks, weeks (Phase 5) ----------
+
+export type BenchmarkTier = "EMERALD" | "DIAMOND" | "MASTER";
+
+export interface SampleProgress {
+  role: string;
+  champion: string | null;
+  label: string;
+  samples: number;
+  target: number;
+}
+
+export interface BenchmarkStatus {
+  progress: {
+    enabled: boolean;
+    tier: BenchmarkTier;
+    tier_label: string;
+    patch: string | null;
+    focus: { roles: string[]; champions: string[] };
+    targets: SampleProgress[];
+    games_by_patch: [string, number][];
+    collector: {
+      players: number;
+      players_checked: number;
+      focus_players: number;
+      players_scanned: number;
+      queued: number;
+    };
+  };
+  collector: {
+    phase: "starting" | "disabled" | "waiting" | "collecting" | "done" | "nothing_to_do";
+    detail: string;
+    last_error: string | null;
+    fetched_this_run: number;
+    updated_ms: number;
+  };
+}
+
+export interface Gap {
+  metric: string;
+  label: string;
+  unit: MetricUnit;
+  decimals: number;
+  higher_is_better: boolean;
+  yours: number;
+  benchmark_median: number;
+  better_than_pct: number;
+  n: number;
+  early: boolean;
+}
+
+export interface GapsView {
+  reference: string | null;
+  role: string;
+  champion: string | null;
+  games: number;
+  gaps: Gap[];
+}
+
+export interface Rank {
+  queue_type: "RANKED_SOLO_5x5" | "RANKED_FLEX_SR" | string;
+  tier: string | null;
+  division: string | null;
+  lp: number;
+  wins: number;
+  losses: number;
+  fetched_at: number;
+}
+
+export interface WeekSummary {
+  week: string;
+  start_ms: number;
+  end_ms: number;
+  games: number;
+  rift_games: number;
+  wins: number;
+  losses: number;
+  complete: boolean;
+  has_report: boolean;
+}
+
+export interface WeekDetail {
+  summary: WeekSummary;
+  baseline_games: number;
+  aggregates: Aggregate[];
+  patterns: SessionPattern[];
+  champions: { champion: string; champion_id: number; games: number; wins: number }[];
+  trend: { week: string; games: number; win_rate_pct: number | null; metrics: Record<string, number> }[];
+  benchmark: GapsView | null;
+  report: Report | null;
 }
 
 export type LiveGameStatus =

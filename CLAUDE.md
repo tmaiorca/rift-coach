@@ -51,6 +51,7 @@ If `cargo` isn't on PATH in an old shell: `$env:PATH = "$env:USERPROFILE\.cargo\
 | Ingest via CLI | `cargo run -p rc-cli -- ingest "TapRooted#BTC" --count 100` |
 | Metrics + percentiles for a game | `cargo run -p rc-cli -- analyze [MATCH_ID]` (`--facts` prints the AI input) |
 | Patterns, win links, sessions | `cargo run -p rc-cli -- patterns --games 100 [--role MIDDLE] [--sessions]` |
+| Benchmark progress and gaps | `cargo run -p rc-cli -- benchmarks [--collect MINUTES] [--role MIDDLE] [--champion Leblanc]` |
 | Mock live game (no League needed) | `cargo run -p rc-cli -- mock-live --speed 10 [--mode CLASSIC]`, then run the app with `$env:RIFT_COACH_LIVE_URL = "http://127.0.0.1:2998"` |
 | Status / role summary | `cargo run -p rc-cli -- status` / `-- summary` |
 | Endpoint smoke test (live) | `cargo run -p rc-cli -- smoke "TapRooted#BTC"` |
@@ -72,10 +73,12 @@ points the live poller at another (loopback-only) Live Client URL.
 - `crates/live` (`rc-live`): Live Client Data API client (own entry only), pure game `Tracker`,
   live view math (`view.rs`: pacing, build progress, goal values), footprint sampler, scripted `mock` game
 - `crates/ai` (`rc-ai`): LLM providers (Anthropic, OpenAI, Gemini, OpenAI-compatible) behind `AiClient`
-- `crates/coach` (`rc-coach`): comparisons vs populations, match detail view, patterns/goals/sessions
-  (loads store data into rc-signals), AI facts, prompts, validation, report generation (post-game, session, token cap)
+- `crates/coach` (`rc-coach`): comparisons vs populations (lobby, personal, benchmark), match detail view,
+  patterns/goals/sessions/weeks (loads store data into rc-signals), benchmarks (focus, targets, gaps), pre-game
+  brief, AI facts, prompts, validation, report generation (post-game, session, weekly, game plan, token cap)
 - `crates/jobs` (`rc-jobs`): persistent job queue engine + handlers (ingest, metrics, auto review,
-  post-game linking), `build_engine`, the live poller (`live.rs`, `spawn_live`)
+  post-game linking, rank, weekly report), `build_engine`, the live poller (`live.rs`, `spawn_live`, pre-game
+  brief), the benchmark collector (`bench.rs`, `spawn_benchmarks`)
 - `cli` (`rc-cli`): dev CLI. `src-tauri` (`rift-coach`): app shell + commands. `ui/`: React app
   (`pages/` per screen, `components/` shared, `lib/` formatting + cached Data Dragon images)
 - `prompts/`: versioned AI prompts (`<name>.v<N>.md`); bump the version (new file + `PROMPT_VERSION`) when changing one
@@ -103,6 +106,11 @@ points the live poller at another (loopback-only) Live Client URL.
   what wins your games". Every number in a signal's `detail` must come from the data (the AI may quote it).
 - Dev builds use `debug = "line-tables-only"` to keep `target/` small; the machine's C: drive is
   nearly full, so run `cargo clean` if builds fail with "no space on device".
+- Benchmark games carry `matches.benchmark_tier`; any "players in your games" query must filter
+  `benchmark_tier IS NULL`. Other players' names are stripped from benchmark raw JSON before storing.
+  The collector must stay one throttled step at a time and yield to user jobs and games.
+- The pre-game brief may use only champions/teams from Spectator (never other players' identities, ranks or
+  histories). AI game plans start only on the loading screen.
 - Live features: only the player's own entry is parsed (`AllGameData::own`); anything new on the
   live view must be the player's own number or a target fixed before the game. Nothing heavy runs
   while `Engine::in_game()`; a new background task must check it.
@@ -121,6 +129,9 @@ points the live poller at another (loopback-only) Live Client URL.
 - Phase 3 (patterns/signals, win correlation, death heat map, focus goals, session
   reviews, auto session review, AI token cap): done 2026-10-18, reviewed.
 - Phase 4 (live poller, game-aware scheduling, live view + pop-out window, planned builds,
-  post-game linking/analysis/notifications, footprint measurement): done 2026-10-18, pending review.
-- Next: Phase 5: benchmark collection (higher-rank, by patch), percentile comparisons,
-  weekly reports, loading-screen game plan.
+  post-game linking/analysis/notifications, footprint measurement): done 2026-10-18, reviewed.
+- Phase 5 (benchmark collection by tier/patch with focus-champion sampling, benchmark percentiles
+  and gaps, weekly pages + AI weekly report, loading-screen brief + AI game plan, ranks): done
+  2026-10-18, pending review.
+- Next: Phase 6: MCP server (read-only tools, LAN + token), installer (NSIS, signed-ready),
+  first-run wizard, auto-update, tray + start with Windows, data export/backup/delete.

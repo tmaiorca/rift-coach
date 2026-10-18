@@ -2,15 +2,18 @@
 //! the match detail view, and produces validated AI reviews.
 
 pub mod analysis;
+pub mod benchmarks;
 pub mod detail;
 pub mod facts;
 pub mod goals;
 pub mod live;
 pub mod patterns;
+pub mod pregame;
 pub mod provider;
 pub mod review;
 pub mod sessions;
 pub mod validate;
+pub mod weekly;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoachError {
