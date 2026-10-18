@@ -40,6 +40,7 @@ export function Settings({ settings, status, onSave, onKeyChanged }: Props) {
       {error && <div className="banner error">{error}</div>}
       <RiotKey status={status} onChanged={onKeyChanged} />
       <AiSection settings={settings} save={save} />
+      <LiveSection settings={settings} save={save} />
       <DataSection settings={settings} save={save} status={status} />
       <Appearance settings={settings} save={save} />
     </div>
@@ -343,6 +344,79 @@ function TokenCap({ settings, save }: { settings: AppSettings; save: Save }) {
         until older ones age out. Leave empty for no cap.
       </span>
     </div>
+  );
+}
+
+function LiveSection({ settings, save }: { settings: AppSettings; save: Save }) {
+  const l = settings.live;
+  const [target, setTarget] = useState(l.cs_target_pm?.toString() ?? "");
+  const setLive = (patch: Partial<AppSettings["live"]>) =>
+    save((s) => ({ ...s, live: { ...s.live, ...patch } }));
+  return (
+    <section className="panel">
+      <h2>Live</h2>
+      <p className="muted">
+        While a game runs, Rift Coach reads only your own numbers from the game client (127.0.0.1:2999) and
+        shows facts plus targets you set beforehand. No AI, advice, alerts, or other players' information
+        during games, per Riot's rules.
+      </p>
+      <Toggle
+        label="Detect running games"
+        hint="Checks every few seconds (backing off to 15 s when nothing runs) for the live view and post-game analysis."
+        checked={l.enabled}
+        onChange={(v) => setLive({ enabled: v })}
+      />
+      <Toggle
+        label="Pause background work during games"
+        hint="Match fetching, analysis, and AI reviews wait until the game ends, so the game gets your PC."
+        checked={l.pause_background}
+        onChange={(v) => setLive({ pause_background: v })}
+      />
+      <Toggle
+        label="Notify me when a finished game is analyzed"
+        hint="A Windows notification once Riot publishes the game and it's analyzed (or its AI review is ready)."
+        checked={l.notify}
+        onChange={(v) => setLive({ notify: v })}
+      />
+      <div className="field">
+        <label>CS per minute target</label>
+        <div className="form-row">
+          <input
+            type="number"
+            min={1}
+            max={15}
+            step={0.1}
+            placeholder="Automatic"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            onBlur={() => {
+              const v = Number(target);
+              void setLive({ cs_target_pm: target.trim() && v > 0 ? v : null });
+            }}
+          />
+        </div>
+        <span className="muted small-text">
+          Empty = an active CS/min focus goal if you have one, else your own average in that role.
+        </span>
+      </div>
+      <div className="field">
+        <label>
+          Keep live snapshots:{" "}
+          <b>{l.keep_snapshots_days === 0 ? "delete once analyzed" : `${l.keep_snapshots_days} days`}</b>
+        </label>
+        <input
+          type="range"
+          min={0}
+          max={60}
+          step={1}
+          value={l.keep_snapshots_days}
+          onChange={(e) => setLive({ keep_snapshots_days: Number(e.target.value) })}
+        />
+        <span className="muted small-text">
+          Your numbers every 15 s of game time. The game's record and footprint stay either way.
+        </span>
+      </div>
+    </section>
   );
 }
 

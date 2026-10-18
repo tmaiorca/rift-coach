@@ -2,6 +2,7 @@
 //! engine as the desktop app.
 
 mod fixtures;
+mod mock_live;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -87,6 +88,34 @@ enum Command {
         #[arg(long)]
         keep: RiotId,
     },
+    /// Serve a scripted game on the Live Client Data API path, to try the
+    /// live view without League (point the app at it with RIFT_COACH_LIVE_URL).
+    MockLive {
+        #[arg(long, default_value_t = 2998)]
+        port: u16,
+        /// Game seconds per real second.
+        #[arg(long, default_value_t = 10.0)]
+        speed: f64,
+        /// Game length in minutes.
+        #[arg(long, default_value_t = 28.0)]
+        minutes: f64,
+        /// Data Dragon champion id.
+        #[arg(long, default_value = "Leblanc")]
+        champion: String,
+        #[arg(long, default_value = "TapRooted#BTC")]
+        riot_id: String,
+        /// CLASSIC games are looked up in Match-V5 afterwards; PRACTICETOOL ones aren't.
+        #[arg(long, default_value = "PRACTICETOOL")]
+        mode: String,
+        #[arg(long)]
+        lose: bool,
+        /// Real seconds of loading screen before the game starts.
+        #[arg(long, default_value_t = 5.0)]
+        loading: f64,
+        /// Real seconds the end screen stays up.
+        #[arg(long, default_value_t = 20.0)]
+        hold: f64,
+    },
 }
 
 #[tokio::main]
@@ -107,6 +136,20 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Summary => summary(&paths),
+        Command::MockLive { port, speed, minutes, champion, riot_id, mode, lose, loading, hold } => {
+            mock_live::run(mock_live::Options {
+                port,
+                speed,
+                minutes,
+                champion,
+                riot_id,
+                mode,
+                lose,
+                loading_s: loading,
+                hold_s: hold,
+            })
+            .await
+        }
         command => {
             let key = load_key();
             let engine = rc_jobs::build_engine(&paths, key, EngineConfig::default())?;
@@ -119,7 +162,9 @@ async fn main() -> anyhow::Result<()> {
                 Command::RecordFixtures { riot_id, platform, matches, out } => {
                     fixtures::record(engine.riot(), &riot_id, platform, matches, &out).await
                 }
-                Command::ScrubFixtures { .. } | Command::Summary => unreachable!("handled above"),
+                Command::ScrubFixtures { .. } | Command::Summary | Command::MockLive { .. } => {
+                    unreachable!("handled above")
+                }
             }
         }
     }

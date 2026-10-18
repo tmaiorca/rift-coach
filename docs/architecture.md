@@ -4,9 +4,11 @@
 
 One Windows process (`rift-coach.exe`, Tauri 2). The UI runs in the system
 WebView2. Rust owns everything else: Riot ingestion, the job queue, storage,
-and later analytics, AI calls, the live poller and the MCP server. The UI calls
+analytics, AI calls, the live poller, and later the MCP server. The UI calls
 Rust through Tauri commands (`src-tauri/src/commands.rs`) and receives progress
-as `engine-event` events.
+as `engine-event` events and live view updates as `live-update` events. A
+second window (label `live`) loads the same page and renders only the live
+board.
 
 ```
 UI (React)  --invoke-->  commands.rs  -->  Engine (rc-jobs)
@@ -16,6 +18,13 @@ UI (React)  --invoke-->  commands.rs  -->  Engine (rc-jobs)
                              |               '-- Db (rc-store, SQLite WAL)
                              '--> rc-coach --+--> rc-signals (pure): patterns, win links, sessions, goal progress
                                              '--> rc-ai --> Anthropic / OpenAI / Gemini / OpenAI-compatible
+
+live poller (rc-jobs::live) --> LiveClient (rc-live) --> https://127.0.0.1:2999 (game client)
+      |-- Tracker (pure): idle / loading / in game / ended
+      |-- Engine::set_in_game  (holds the queue while playing)
+      |-- rc-live::view (pure): pacing, build progress, goal values  --> watch channel --> UI
+      |-- footprint Sampler (sysinfo): this process + WebView2 children
+      '-- on end: live_games row, Job::PostGame
 ```
 
 `rc-cli` builds the identical engine (`rc_jobs::build_engine`) for headless use.
@@ -46,15 +55,61 @@ The `jobs` table is the queue. Rows are claimed atomically with
   workers pause until the key changes
 
 On startup, `running` rows (interrupted by a crash or close) return to
-`queued`. A `dedupe_key` that is already queued or running can't be added
-twice; re-enqueuing a finished one re-queues it. Because handlers are
-idempotent, re-running ingest only fetches what's missing.
+`queued`. A `dedupe_key` that is already queued can't be added twice;
+re-enqueuing a running one sets `rerun`, so it runs once more when it
+finishes (its inputs may have changed: metrics that started before the
+timeline arrived). Re-enqueuing a finished one re-queues it. Because handlers
+are idempotent, re-running ingest only fetches what's missing.
 
 Ingestion: `ResolveAccount` → `SyncMatchList` → `FetchMatch` (×N) →
 `FetchTimeline` (×N) + `DdragonSync` (per patch). Matches outrank timelines,
 so the list fills first. Each stored match and timeline queues
 `ComputeMetrics`; with auto review on, a fresh game (ended < 6 h ago) of the
 active account then queues `AiReview`.
+
+## Live games and game-aware scheduling
+
+`rc-live` reads `/liveclientdata/allgamedata` and keeps only the active
+player's own entry (`AllGameData::own`); other players are dropped while
+parsing. The game serves it with a certificate from Riot's own root CA that
+doesn't name `127.0.0.1`, so `LiveClient` skips certificate checks, and to
+keep that safe it refuses any non-loopback URL and never sends credentials.
+`RIFT_COACH_LIVE_URL` points it elsewhere (the `rc-cli mock-live` server).
+
+The pure `Tracker` turns polls into transitions:
+
+- no listener → `Absent`; a response without player data → `NotReady`
+  (loading screen, spectating); data → in game;
+- a `GameEnd` event ends the game; a game whose endpoint vanishes for 2
+  minutes without one ends as `disappeared` (shorter gaps are reconnects);
+- game time going backwards starts a new game.
+
+Polls run every 2 s in a game and back off from 2 s to 15 s when idle. While
+loading or in game, `Engine::set_in_game(true)` holds the queue (a running
+job finishes; nothing new starts) and the session-review checker skips; the
+UI freezes the ambient background.
+
+On `Started`, the poller records a `live_games` row (account matched by Riot
+ID) and builds the static `LiveContext` once (`rc_coach::live::context`): the
+CS target (setting → CS/min goal → own role average), a 70th-percentile
+benchmark from the role population, the planned or usual build, and the
+active goals. Item data comes from the cached Data Dragon files of the newest
+stored patch. Each poll then computes pacing, build progress (components owned
+count toward the next item via the recipe tree) and goal values, and
+publishes a `LiveState` on a `watch` channel. Own snapshots go to
+`live_snapshots` every 15 s of game time. The footprint sampler reads CPU and
+memory for this process and its descendants every 5 s.
+
+On `Ended`, the row gets the result and footprint, and (for tracked accounts,
+except practice tool games) `Job::PostGame` is queued a minute later. It lists
+the account's newest match IDs, fetches any not stored, and links the match
+that started within 5 minutes of the live game. Until Riot publishes it, it
+retries with backoff (10 attempts, about 1.5 hours). The usual
+timeline → metrics → auto review chain follows. When metrics with the
+timeline are computed for a linked game, the engine emits `PostGameReady`
+(once, via `analyzed_at`) and prunes snapshots past the retention setting.
+The app shows a Windows notification for that, or for `ReviewReady` of a
+linked game.
 
 ## Metrics and comparisons
 
@@ -141,7 +196,8 @@ Everything that should survive a restart is in the database: settings
 (`activity_log`, last 500 lines, written by the engine from its events), and
 reports. The window plugin remembers size and position. The UI is a single
 page with a sidebar; the ambient background (`AmbientBackground.tsx`) uses one
-canvas at ~30 fps and stops when hidden or when reduced motion is requested.
+canvas at ~30 fps and stops when hidden, when reduced motion is requested, or
+while a game is loading or running.
 
 ## Identity and key changes
 

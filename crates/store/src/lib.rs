@@ -8,6 +8,7 @@ pub mod activity;
 pub mod ddragon;
 pub mod goals;
 pub mod jobs;
+pub mod live;
 pub mod matches;
 pub mod metrics;
 pub mod raw;
@@ -43,6 +44,7 @@ fn migrations() -> Migrations<'static> {
         M::up(include_str!("../migrations/001_init.sql")),
         M::up(include_str!("../migrations/002_metrics_ai_activity.sql")),
         M::up(include_str!("../migrations/003_signals_goals_sessions.sql")),
+        M::up(include_str!("../migrations/004_live.sql")),
     ])
 }
 

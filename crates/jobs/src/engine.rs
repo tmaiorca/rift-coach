@@ -74,17 +74,64 @@ impl KeyStatus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EngineEvent {
-    JobStarted { kind: String, label: String },
-    JobSucceeded { kind: String, label: String },
-    JobRetrying { kind: String, label: String, error: String, retry_in_s: u64 },
-    JobFailed { kind: String, label: String, error: String },
-    MatchStored { match_id: String },
-    TimelineStored { match_id: String },
-    KeyStatusChanged { status: KeyStatus },
-    KeyGenerationChanged { key_gen_id: i64 },
-    MetricsComputed { match_id: String },
-    ReviewReady { match_id: String, report_id: i64 },
-    SessionReviewReady { scope: String, report_id: i64 },
+    JobStarted {
+        kind: String,
+        label: String,
+    },
+    JobSucceeded {
+        kind: String,
+        label: String,
+    },
+    JobRetrying {
+        kind: String,
+        label: String,
+        error: String,
+        retry_in_s: u64,
+    },
+    JobFailed {
+        kind: String,
+        label: String,
+        error: String,
+    },
+    MatchStored {
+        match_id: String,
+    },
+    TimelineStored {
+        match_id: String,
+    },
+    KeyStatusChanged {
+        status: KeyStatus,
+    },
+    KeyGenerationChanged {
+        key_gen_id: i64,
+    },
+    MetricsComputed {
+        match_id: String,
+    },
+    ReviewReady {
+        match_id: String,
+        report_id: i64,
+    },
+    SessionReviewReady {
+        scope: String,
+        report_id: i64,
+    },
+    /// A game seen live was found in Match-V5.
+    LiveGameLinked {
+        live_game_id: i64,
+        match_id: String,
+    },
+    /// A game seen live is fully analyzed (metrics with timeline).
+    /// `review_queued`: an automatic AI review follows.
+    PostGameReady {
+        live_game_id: i64,
+        match_id: String,
+        review_queued: bool,
+    },
+    /// Background work paused or resumed because a game is running.
+    InGameChanged {
+        in_game: bool,
+    },
 }
 
 impl EngineEvent {
@@ -93,6 +140,10 @@ impl EngineEvent {
         Some(match self {
             Self::MatchStored { match_id } => ("info", format!("Stored match {match_id}")),
             Self::TimelineStored { match_id } => ("info", format!("Stored timeline {match_id}")),
+            // Waiting for Riot to publish a game is expected, not a warning.
+            Self::JobRetrying { kind, retry_in_s, .. } if kind == "post_game" => {
+                ("info", format!("Waiting for Riot to publish your last game (checking again in {retry_in_s}s)"))
+            }
             Self::JobRetrying { label, error, retry_in_s, .. } => {
                 ("warn", format!("Retrying {label} in {retry_in_s}s: {error}"))
             }
@@ -104,6 +155,10 @@ impl EngineEvent {
             Self::KeyGenerationChanged { .. } => ("warn", "Riot API key changed; re-resolving accounts".into()),
             Self::ReviewReady { match_id, .. } => ("info", format!("AI review ready for {match_id}")),
             Self::SessionReviewReady { .. } => ("info", "AI session review ready".into()),
+            Self::LiveGameLinked { match_id, .. } => ("info", format!("Found your last game: {match_id}")),
+            Self::PostGameReady { match_id, .. } => ("info", format!("Your last game is analyzed ({match_id})")),
+            Self::InGameChanged { in_game: true } => ("info", "Game detected: background work paused".into()),
+            Self::InGameChanged { in_game: false } => ("info", "Background work resumed".into()),
             _ => return None,
         })
     }
@@ -113,6 +168,8 @@ impl EngineEvent {
 pub struct EngineStatus {
     pub key_status: KeyStatus,
     pub paused: bool,
+    /// Work is held because a game is running.
+    pub in_game: bool,
     pub jobs: JobCounts,
     pub rate_limits: Vec<BucketSnapshot>,
     pub recent_failures: Vec<FailedJob>,
@@ -134,6 +191,7 @@ pub struct Engine {
     wake: Notify,
     key_status: Mutex<KeyStatus>,
     paused: AtomicBool,
+    in_game: AtomicBool,
     items: Mutex<HashMap<String, Arc<ItemCatalog>>>,
 }
 
@@ -149,6 +207,7 @@ impl Engine {
             wake: Notify::new(),
             key_status: Mutex::new(key_status),
             paused: AtomicBool::new(false),
+            in_game: AtomicBool::new(false),
             items: Mutex::new(HashMap::new()),
         })
     }
@@ -201,6 +260,10 @@ impl Engine {
         if recovered > 0 {
             tracing::info!(recovered, "re-queued jobs interrupted by the last shutdown");
         }
+        let pruned = self.prune_live_snapshots().await?;
+        if pruned > 0 {
+            tracing::info!(games = pruned, "pruned live snapshots");
+        }
         let stale = self.db.call(|c| rc_store::metrics::stale_matches(c, rc_metrics::METRICS_VERSION)).await?;
         if !stale.is_empty() {
             tracing::info!(matches = stale.len(), "queueing metrics computation");
@@ -229,6 +292,9 @@ impl Engine {
             let mut tick = tokio::time::interval(SESSION_CHECK_EVERY);
             loop {
                 tick.tick().await;
+                if checker.in_game() {
+                    continue;
+                }
                 if let Err(e) = checker.maybe_queue_session_review().await {
                     tracing::warn!(error = ?e, "session review check failed");
                 }
@@ -248,6 +314,11 @@ impl Engine {
     }
 
     pub async fn enqueue_many(&self, jobs: Vec<Job>) -> Result<usize, StoreError> {
+        self.enqueue_at(jobs, now_ms()).await
+    }
+
+    /// Queues jobs that become due at `run_at_ms`.
+    pub async fn enqueue_at(&self, jobs: Vec<Job>, run_at_ms: i64) -> Result<usize, StoreError> {
         let rows = jobs
             .iter()
             .map(|j| {
@@ -256,7 +327,7 @@ impl Engine {
                     payload: serde_json::to_string(j)?,
                     priority: j.priority(),
                     dedupe_key: j.dedupe_key(),
-                    run_at_ms: now_ms(),
+                    run_at_ms,
                     max_attempts: j.max_attempts(),
                 })
             })
@@ -336,8 +407,24 @@ impl Engine {
         }
     }
 
+    /// Hold all queued work while a game runs (game-aware scheduling). A
+    /// job already running finishes; nothing new starts until released.
+    pub fn set_in_game(&self, in_game: bool) {
+        if self.in_game.swap(in_game, Ordering::SeqCst) != in_game {
+            tracing::info!(in_game, "game-aware scheduling");
+            self.emit(EngineEvent::InGameChanged { in_game });
+            if !in_game {
+                self.wake.notify_waiters();
+            }
+        }
+    }
+
+    pub fn in_game(&self) -> bool {
+        self.in_game.load(Ordering::SeqCst)
+    }
+
     fn blocked(&self) -> bool {
-        self.paused.load(Ordering::SeqCst) || self.key_status().blocks_work()
+        self.paused.load(Ordering::SeqCst) || self.in_game() || self.key_status().blocks_work()
     }
 
     pub async fn status(&self) -> Result<EngineStatus, StoreError> {
@@ -346,6 +433,7 @@ impl Engine {
         Ok(EngineStatus {
             key_status: self.key_status(),
             paused: self.paused.load(Ordering::SeqCst),
+            in_game: self.in_game(),
             jobs,
             rate_limits: self.riot.limiter().snapshot(),
             recent_failures,

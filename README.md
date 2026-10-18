@@ -5,13 +5,16 @@ computes detailed metrics for every one of them, compares you with the players
 in your own games and with your own history, finds the habits that repeat
 across your games and which of your numbers actually go with winning, tracks
 focus goals game by game, and (with your own AI key) writes grounded reviews
-of single games and whole play sessions. Everything stays on your PC.
+of single games and whole play sessions. While you play it stays out of the
+way: it shows only your own numbers on a second screen, pauses its background
+work, and analyzes the game as soon as Riot publishes it. Everything stays on
+your PC.
 
 > This guide is also the **Guide** page inside the app. It's one file
 > (`README.md`), so the app and GitHub always show the same text.
 
-**Status:** Phase 3 of 6 (patterns across games, win correlation, focus goals,
-session reviews). See [Roadmap](#roadmap).
+**Status:** Phase 4 of 6 (live companion, game-aware scheduling, analysis when
+a game ends). See [Roadmap](#roadmap).
 
 ## Contents
 
@@ -20,6 +23,7 @@ session reviews). See [Roadmap](#roadmap).
 - [How the numbers work](#how-the-numbers-work)
 - [Patterns and what wins your games](#patterns-and-what-wins-your-games)
 - [Focus goals](#focus-goals)
+- [Live games](#live-games)
 - [The AI coach](#the-ai-coach)
 - [Settings](#settings)
 - [Your data, keys and privacy](#your-data-keys-and-privacy)
@@ -51,6 +55,13 @@ first"), your focus goals with progress, key metric averages with your last 5
 games alongside, a trend chart for any metric with a 5-game rolling average,
 your champions, recent games, sync progress, Riot rate-limit meters, and the
 activity log. The log is saved, so it's still there after a restart.
+
+**Live.** While a game runs: the game clock, your KDA, CS and gold, CS pacing
+against your target, gold toward the next item of your planned build, and your
+focus goals' numbers this game (see [Live games](#live-games)). **Pop out
+window** opens a small window for a second monitor. Below that: your last
+game's post-game status (with a button to open it once it's analyzed), the
+**Planned build** editor, and the app's measured footprint during each game.
 
 **Matches.** Every stored game, newest first, filterable by champion, role and
 result. ARAM, Arena and other modes are shown dimmed (you can hide them) and
@@ -180,6 +191,62 @@ games*). It counts your Summoner's Rift games played after you create it.
   delete a goal. Up to 3 can be active at once.
 - AI reviews (game and session) see your active goals and comment on them.
 
+## Live games
+
+Rift Coach checks every few seconds whether a game is running (it asks the
+game client's local Live Client Data API at `127.0.0.1:2999`; when nothing
+runs it backs off to every 15 seconds). It notices the loading screen,
+the game, and the end screen.
+
+**While you play**
+
+- **Background work pauses.** Match fetching, metric calculation and AI
+  reviews wait until the game ends (a job already running finishes first).
+  The animated background freezes. Only the small live poller runs. Turn this
+  off in Settings → Live if you prefer.
+- **The live view** (Live page or the pop-out window) shows only your own
+  numbers from the game client and targets you set before the game:
+  - **CS pacing** from 5:00: your CS against *target × minutes played*. The
+    target is, in order: the one in Settings → Live, an active "CS per minute
+    at least" goal, or your own average in that role. The benchmark line is
+    the top 30% of players in your role across your stored games (Phase 5
+    adds real higher-rank benchmarks).
+  - **Build:** gold toward the next item you don't own yet in your planned
+    build, counting the components of it you already hold. With no saved plan
+    it uses your most common finished items on that champion.
+  - **KDA, CS, gold, level, and focus goals.** Goals on CS/min, CS at 10:00,
+    deaths, deaths before 14:00, kills, assists, KDA or vision show this
+    game's value; others show after the game.
+  - No AI, no advice, no alerts or sounds, and nothing about other players.
+    The window never draws over the game.
+
+**When the game ends**
+
+1. Work resumes on the end screen.
+2. About a minute later the app asks Riot for your newest games and links the
+   one that started when your live game did. Riot usually publishes a game
+   1–5 minutes after it ends; until then it keeps checking (for up to about
+   1.5 hours).
+3. The match and timeline are fetched and analyzed, then an automatic AI
+   review runs if that's turned on.
+4. A Windows notification says the game is analyzed (or that its AI review is
+   ready), and the Live page's **Last game** card opens it.
+
+Only games of your tracked Riot IDs are analyzed. Practice tool games are
+recorded but never reach Riot's match history, so they're not looked up.
+
+**Snapshots and footprint.** Your numbers are saved every 15 seconds of game
+time, and deleted after a game is analyzed (default after 7 days; Settings →
+Live). The app's own CPU and memory are measured every 5 seconds during each
+game: its backend plus its windows (WebView2), counting private memory. The
+budget is **1% CPU on average** (a share of the whole processor) and **400 MB
+memory**, and the Live page shows each game against it. Closing the pop-out
+window (or minimizing the main one) saves the most.
+
+**Planned builds.** On the Live page, pick a champion, then add, reorder
+or remove items (finished items and boots for Summoner's Rift, up to 8) and
+**Save plan**. **Use my usual items instead** removes the saved plan.
+
 ## The AI coach
 
 - **What it sees.** Only computed facts: for a game, the metrics, the
@@ -221,6 +288,11 @@ games*). It counts your Summoner's Rift games played after you create it.
 | Riot API key | Save, replace or remove the key in Windows Credential Manager; reload after changing the environment variable |
 | AI provider, key, model, endpoint | Which AI to use. **Load models** lists the models your key can use; **Test connection** sends a one-word prompt |
 | Max output tokens | Upper bound per review (default 4000) |
+| Detect running games | Watch for a game for the live view and post-game analysis (default on) |
+| Pause background work during games | Hold fetching, analysis and AI work while a game runs (default on) |
+| Notify me when a finished game is analyzed | Windows notification when your last game (or its AI review) is ready (default on) |
+| CS per minute target | Target for live CS pacing. Empty = your CS/min goal, else your own average in the role |
+| Keep live snapshots | Days to keep a game's 15-second snapshots after it's analyzed (default 7; 0 = delete right away) |
 | Automatically review each new game / each play session | See above |
 | Token cap (last 30 days) | Stop generating reviews once this many tokens were used in the last 30 days; shows your usage. Empty = no cap |
 | Look-back window | How many of your recent games feed baselines, patterns, the dashboard and trends (default 30) |
@@ -251,7 +323,10 @@ gameplay", reveal hidden information, or automate input. So Rift Coach:
   screen as a static game plan), never in reaction to a live game;
 - won't track enemy cooldowns or timers, give live alerts, read game memory,
   or estimate MMR;
-- will show only your own factual numbers during a game (Phase 4).
+- shows only your own factual numbers during a game, next to targets you set
+  beforehand. The live data includes other players' scoreboard entries; the
+  app drops them while reading and never stores or shows them;
+- never draws an overlay on the game or sends input to it.
 
 ## Troubleshooting
 
@@ -264,6 +339,10 @@ gameplay", reveal hidden information, or automate input. So Rift Coach:
 | "The AI token cap is reached" | Raise or clear the token cap in Settings → AI coach |
 | No patterns shown | Patterns need 5+ games with timelines (8+ in a role for "below most players"); sync more games or widen the window |
 | Page at localhost:1420 in a browser says to use the app | That's the dev server; use the Rift Coach window |
+| The Live page doesn't notice my game | Check Settings → Live → Detect running games. The game client must be running a game (not the lobby or champ select) |
+| "Waiting for Riot to publish the match" for a long time | Riot occasionally takes longer; it keeps checking for about 1.5 hours. A sync also picks it up |
+| My game wasn't analyzed | Only tracked Riot IDs are analyzed; add the account on the Players page |
+| CS in the live view jumps in steps | That's how the game client reports it; the number catches up |
 
 ## For developers
 
@@ -278,7 +357,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 npm run lint                         # eslint + TypeScript
 cargo run -p rc-cli -- analyze       # print the newest game's metrics and percentiles
 cargo run -p rc-cli -- patterns --games 100 --sessions   # patterns, win links, sessions
+cargo run -p rc-cli -- mock-live --speed 10              # a scripted game for the live view
 ```
+
+To try the live view without League, run `mock-live` in one terminal and the
+app pointed at it in another:
+`$env:RIFT_COACH_LIVE_URL = "http://127.0.0.1:2998"; npm run tauri dev`.
+The mock defaults to a practice tool game (no Match-V5 lookup afterwards);
+`--mode CLASSIC` exercises the post-game lookup too.
 
 Architecture: `docs/architecture.md`. Conventions and commands: `CLAUDE.md`.
 AI prompts are versioned files in `prompts/`. Test fixtures in
@@ -290,6 +376,6 @@ replaced.
 1. ✅ Foundation: Riot client and rate limiter, SQLite, job queue, Data Dragon cache.
 2. ✅ Metrics and baselines, match detail with charts and death map, AI post-game review, settings, player lookup.
 3. ✅ Patterns across games, win correlation, death heat map, focus goals, session reviews, AI token cap.
-4. Live companion (your own numbers only), game-aware scheduling, auto review at game end.
+4. ✅ Live companion (your own numbers only), game-aware scheduling, analysis and review at game end, footprint measurement.
 5. Higher-rank benchmarks, weekly reports, loading-screen game plan.
 6. MCP server for AI agents, installer, first-run wizard, auto-update.

@@ -47,6 +47,7 @@ pub struct AppSettings {
     pub session_gap_min: u32,
     pub ai: AiSettings,
     pub appearance: AppearanceSettings,
+    pub live: LiveSettings,
 }
 
 impl Default for AppSettings {
@@ -59,7 +60,31 @@ impl Default for AppSettings {
             session_gap_min: 60,
             ai: AiSettings::default(),
             appearance: AppearanceSettings::default(),
+            live: LiveSettings::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct LiveSettings {
+    /// Watch for a running game (Live Client Data API on 127.0.0.1:2999).
+    pub enabled: bool,
+    /// Hold match fetching, metrics, and AI jobs while a game is running.
+    pub pause_background: bool,
+    /// CS per minute to pace against. `None` = an active CS/min goal, else
+    /// your own average in the role.
+    pub cs_target_pm: Option<f64>,
+    /// Days to keep a game's live snapshots after it's analyzed (0 = delete
+    /// as soon as it is).
+    pub keep_snapshots_days: u32,
+    /// Windows notification when a finished game's analysis or AI review is ready.
+    pub notify: bool,
+}
+
+impl Default for LiveSettings {
+    fn default() -> Self {
+        Self { enabled: true, pause_background: true, cs_target_pm: None, keep_snapshots_days: 7, notify: true }
     }
 }
 
@@ -132,6 +157,8 @@ mod tests {
             assert_eq!(s.ai.max_tokens, 4000);
             assert_eq!(s.session_gap_min, 60);
             assert_eq!(s.ai.monthly_token_limit, None);
+            assert!(s.live.enabled && s.live.pause_background);
+            assert_eq!(s.live.keep_snapshots_days, 7);
             Ok(())
         })
         .expect("ok");

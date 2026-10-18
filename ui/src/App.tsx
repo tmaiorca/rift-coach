@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, inTauri, onEngineEvent } from "./api";
+import { api, inTauri, onEngineEvent, onLiveUpdate } from "./api";
 import { AmbientBackground } from "./components/AmbientBackground";
 import { StatusBar } from "./components/StatusBar";
 import { ChampionsContext } from "./lib/assets";
 import { Dashboard } from "./pages/Dashboard";
 import { Goals } from "./pages/Goals";
 import { Guide } from "./pages/Guide";
+import { Live } from "./pages/Live";
 import { MatchDetail } from "./pages/MatchDetail";
 import { Matches } from "./pages/Matches";
 import { Patterns } from "./pages/Patterns";
@@ -19,6 +20,7 @@ import type {
   AppSettings,
   ChampionEntry,
   EngineEvent,
+  LivePhase,
   GoalInput,
   MatchRow,
   StatusView,
@@ -26,6 +28,7 @@ import type {
 
 type Page =
   | "dashboard"
+  | "live"
   | "matches"
   | "match"
   | "patterns"
@@ -38,6 +41,7 @@ type Page =
 
 const NAV: { id: Page; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: "◈" },
+  { id: "live", label: "Live", icon: "◉" },
   { id: "matches", label: "Matches", icon: "☰" },
   { id: "patterns", label: "Patterns", icon: "⌖" },
   { id: "sessions", label: "Sessions", icon: "◷" },
@@ -75,6 +79,7 @@ function Shell() {
   const [goalDraft, setGoalDraft] = useState<GoalInput | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [livePhase, setLivePhase] = useState<LivePhase>("idle");
   const refreshTimer = useRef<number | undefined>(undefined);
   const mainRef = useRef<HTMLElement>(null);
 
@@ -111,8 +116,14 @@ function Shell() {
       (list) => setChampions(new Map(list.map((c) => [c.key, c]))),
       () => {},
     );
+    // Only the phase: the board itself re-renders on its own page.
+    api.liveState().then(
+      (s) => setLivePhase(s.phase),
+      () => {},
+    );
+    const unlistenLive = onLiveUpdate((s) => setLivePhase(s.phase));
     const unlisten = onEngineEvent((ev: EngineEvent) => {
-      if (ev.type === "key_status_changed") void refreshStatus();
+      if (ev.type === "key_status_changed" || ev.type === "in_game_changed") void refreshStatus();
       if (
         [
           "match_stored",
@@ -120,6 +131,8 @@ function Shell() {
           "metrics_computed",
           "review_ready",
           "session_review_ready",
+          "live_game_linked",
+          "post_game_ready",
           "job_failed",
         ].includes(ev.type)
       )
@@ -127,6 +140,7 @@ function Shell() {
     });
     return () => {
       void unlisten.then((f) => f());
+      void unlistenLive.then((f) => f());
     };
   }, [refreshStatus, scheduleRefresh]);
 
@@ -179,6 +193,13 @@ function Shell() {
     scheduleRefresh();
   };
 
+  const mostPlayed = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const m of matches.slice(0, 50))
+      if (m.is_standard_rift) counts.set(m.champion_id, (counts.get(m.champion_id) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  }, [matches]);
+
   // Background champion: explicit choice → open match → most played.
   const bgChampion = useMemo(() => {
     const chosen = settings?.appearance.background_champion;
@@ -187,12 +208,9 @@ function Shell() {
       const m = matches.find((x) => x.match_id === ui.matchId);
       if (m) return String(m.champion_id);
     }
-    const counts = new Map<number, number>();
-    for (const m of matches.slice(0, 50))
-      if (m.is_standard_rift) counts.set(m.champion_id, (counts.get(m.champion_id) ?? 0) + 1);
-    const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-    return top ? String(top[0]) : null;
-  }, [settings, ui, matches]);
+    return mostPlayed != null ? String(mostPlayed) : null;
+  }, [settings, ui, matches, mostPlayed]);
+  const playing = livePhase === "loading" || livePhase === "in_game";
 
   if (!ui || !settings) return <div className="boot">Rift Coach</div>;
   const page = ui.page === "match" && !ui.matchId ? "matches" : ui.page;
@@ -205,6 +223,7 @@ function Shell() {
         enabled={settings.appearance.animated_background}
         particles={settings.appearance.particles}
         intensity={settings.appearance.background_intensity}
+        still={playing}
       />
       <div className="app">
         <nav className="sidebar">
@@ -215,13 +234,16 @@ function Shell() {
             <button key={n.id} className={`nav ${navActive === n.id ? "on" : ""}`} onClick={() => go(n.id)}>
               <span className="nav-icon">{n.icon}</span>
               {n.label}
+              {n.id === "live" && playing && <span className="live-dot" title="Game running" />}
             </button>
           ))}
           <div className="spacer" />
           <div className="muted small-text sidebar-foot">
-            {busy
-              ? `Syncing… ${(jobs?.ready ?? 0) + (jobs?.running ?? 0) + (jobs?.scheduled ?? 0)} jobs`
-              : "Idle"}
+            {status?.engine.in_game
+              ? "Game running: work paused"
+              : busy
+                ? `Syncing… ${(jobs?.ready ?? 0) + (jobs?.running ?? 0) + (jobs?.scheduled ?? 0)} jobs`
+                : "Idle"}
           </div>
         </nav>
         <div className="main">
@@ -249,6 +271,15 @@ function Shell() {
                 onGoPatterns={() => go("patterns")}
                 onGoGoals={() => go("goals")}
                 onSync={sync}
+              />
+            )}
+            {page === "live" && (
+              <Live
+                status={status}
+                refreshKey={refreshKey}
+                defaultChampion={mostPlayed != null ? (champions.get(mostPlayed)?.id ?? null) : null}
+                onOpenMatch={openMatch}
+                onOpenSettings={() => go("settings")}
               />
             )}
             {page === "patterns" && (

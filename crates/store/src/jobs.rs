@@ -27,9 +27,10 @@ pub struct ClaimedJob {
     pub max_attempts: i32,
 }
 
-/// Adds a job. If one with the same dedupe key is queued or running, nothing
-/// happens. If it already finished or failed, it's re-queued fresh. Returns
-/// whether anything changed.
+/// Adds a job. If one with the same dedupe key is queued, nothing happens;
+/// if one is running, it runs again once it finishes (its inputs may have
+/// changed since it started). If it already finished or failed, it's
+/// re-queued fresh. Returns whether anything changed.
 pub fn enqueue(conn: &Connection, job: &NewJob, now: i64) -> Result<bool> {
     let changed = conn.execute(
         "INSERT INTO jobs (kind, payload, status, priority, attempts, max_attempts, next_run_at, dedupe_key,
@@ -43,7 +44,15 @@ pub fn enqueue(conn: &Connection, job: &NewJob, now: i64) -> Result<bool> {
          WHERE jobs.status IN ('done', 'failed')",
         params![job.kind, job.payload, job.priority, job.max_attempts, job.run_at_ms, job.dedupe_key, now],
     )?;
-    Ok(changed > 0)
+    if changed > 0 {
+        return Ok(true);
+    }
+    let rerun = conn.execute(
+        "UPDATE jobs SET rerun = 1, payload = ?2, updated_at = ?3
+          WHERE dedupe_key = ?1 AND status = 'running' AND rerun = 0",
+        params![job.dedupe_key, job.payload, now],
+    )?;
+    Ok(rerun > 0)
 }
 
 /// Atomically marks the highest-priority due job as running and returns it.
@@ -71,7 +80,11 @@ pub fn claim_next(conn: &Connection, now: i64) -> Result<Option<ClaimedJob>> {
 
 pub fn complete(conn: &Connection, id: i64, now: i64) -> Result<()> {
     conn.execute(
-        "UPDATE jobs SET status = 'done', last_error = NULL, updated_at = ?2 WHERE id = ?1",
+        "UPDATE jobs SET status = CASE WHEN rerun = 1 THEN 'queued' ELSE 'done' END,
+                         attempts = CASE WHEN rerun = 1 THEN 0 ELSE attempts END,
+                         next_run_at = CASE WHEN rerun = 1 THEN ?2 ELSE next_run_at END,
+                         rerun = 0, last_error = NULL, updated_at = ?2
+          WHERE id = ?1",
         params![id, now],
     )?;
     Ok(())
@@ -221,8 +234,12 @@ mod tests {
             assert!(enqueue(c, &job("k", 0, 0), 0)?);
             assert!(!enqueue(c, &job("k", 0, 0), 0)?, "queued: deduped");
             let j = claim_next(c, 0)?.expect("job");
-            assert!(!enqueue(c, &job("k", 0, 0), 0)?, "running: deduped");
+            assert!(enqueue(c, &job("k", 0, 0), 0)?, "running: marked to run again");
+            assert!(!enqueue(c, &job("k", 0, 0), 0)?, "only once");
             complete(c, j.id, 1)?;
+            let j = claim_next(c, 1)?.expect("re-run after finishing");
+            complete(c, j.id, 1)?;
+            assert!(claim_next(c, 1)?.is_none(), "and then done");
             assert!(enqueue(c, &job("k", 0, 0), 2)?, "done: re-queued");
             let j = claim_next(c, 2)?.expect("job");
             assert_eq!(j.attempts, 1, "attempts reset on re-queue");

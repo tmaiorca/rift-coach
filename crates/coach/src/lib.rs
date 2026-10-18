@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod detail;
 pub mod facts;
 pub mod goals;
+pub mod live;
 pub mod patterns;
 pub mod provider;
 pub mod review;

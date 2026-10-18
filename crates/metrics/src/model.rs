@@ -243,6 +243,11 @@ pub struct ItemInfo {
     /// A finished, non-boot, non-consumable item (builds into nothing and
     /// costs at least [`ItemCatalog::FINISHED_MIN_GOLD`]).
     pub completed: bool,
+    /// Can go in a planned build: buyable on Summoner's Rift, builds into
+    /// nothing, not a consumable or trinket (boots included).
+    pub plannable: bool,
+    /// Recipe components (item ids, repeats allowed).
+    pub from: Vec<i32>,
 }
 
 impl ItemCatalog {
@@ -254,6 +259,14 @@ impl ItemCatalog {
 
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
+    }
+
+    /// Items that can go in a planned build, cheapest first.
+    pub fn plannable(&self) -> Vec<(i32, &ItemInfo)> {
+        let mut v: Vec<(i32, &ItemInfo)> =
+            self.items.iter().filter(|(_, i)| i.plannable).map(|(k, i)| (*k, i)).collect();
+        v.sort_by(|a, b| a.1.total_gold.cmp(&b.1.total_gold).then(a.1.name.cmp(&b.1.name)));
+        v
     }
 
     pub fn from_ddragon_json(json: &[u8]) -> Result<Self, serde_json::Error> {
@@ -268,13 +281,23 @@ impl ItemCatalog {
             #[serde(default)]
             into: Vec<String>,
             #[serde(default)]
+            from: Vec<String>,
+            #[serde(default)]
             tags: Vec<String>,
+            #[serde(default)]
+            maps: HashMap<String, bool>,
+            #[serde(default, rename = "inStore")]
+            in_store: Option<bool>,
+            #[serde(default, rename = "requiredChampion")]
+            required_champion: Option<String>,
             gold: Gold,
         }
         #[derive(Deserialize)]
         struct Gold {
             #[serde(default)]
             total: i32,
+            #[serde(default)]
+            purchasable: bool,
         }
         let file: File = serde_json::from_slice(json)?;
         let items = file
@@ -284,9 +307,27 @@ impl ItemCatalog {
                 let id = id.parse().ok()?;
                 let excluded = it.tags.iter().any(|t| matches!(t.as_str(), "Boots" | "Consumable" | "Trinket"));
                 let completed = it.into.is_empty() && !excluded && it.gold.total >= Self::FINISHED_MIN_GOLD;
-                Some((id, ItemInfo { name: it.name, total_gold: it.gold.total, completed }))
+                let on_rift = it.maps.get("11").copied().unwrap_or(false);
+                let plannable = completed_or_boots(&it.tags, it.into.is_empty(), it.gold.total)
+                    && on_rift
+                    && it.gold.purchasable
+                    && it.in_store != Some(false)
+                    && it.required_champion.as_deref().is_none_or(str::is_empty);
+                let from = it.from.iter().filter_map(|f| f.parse().ok()).collect();
+                Some((id, ItemInfo { name: it.name, total_gold: it.gold.total, completed, plannable, from }))
             })
             .collect();
         Ok(Self { items })
     }
+
+    /// Test/fixture helper.
+    pub fn from_items(items: impl IntoIterator<Item = (i32, ItemInfo)>) -> Self {
+        Self { items: items.into_iter().collect() }
+    }
+}
+
+/// A finished item or a tier-2 boot, not a consumable or trinket.
+fn completed_or_boots(tags: &[String], final_item: bool, gold: i32) -> bool {
+    let excluded = tags.iter().any(|t| matches!(t.as_str(), "Consumable" | "Trinket"));
+    final_item && !excluded && gold >= 900
 }

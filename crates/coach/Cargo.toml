@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 rc-ai = { version = "0.1.0", path = "../ai" }
 rc-common = { version = "0.1.0", path = "../common" }
+rc-live = { version = "0.1.0", path = "../live" }
 rc-metrics = { version = "0.1.0", path = "../metrics" }
 rc-signals = { version = "0.1.0", path = "../signals" }
 rc-store = { version = "0.1.0", path = "../store" }

@@ -178,6 +178,13 @@ pub fn has_timeline(conn: &Connection, match_id: &str) -> Result<bool> {
         .unwrap_or(false))
 }
 
+/// Patch of the newest stored match.
+pub fn latest_patch(conn: &Connection) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT patch FROM matches WHERE patch != '' ORDER BY game_start_ms DESC LIMIT 1", [], |r| r.get(0))
+        .optional()?)
+}
+
 pub fn patch_of_match(conn: &Connection, match_id: &str) -> Result<Option<String>> {
     Ok(conn.query_row("SELECT patch FROM matches WHERE match_id = ?1", [match_id], |r| r.get(0)).optional()?)
 }

@@ -7,7 +7,9 @@ mod bootstrap;
 mod engine;
 mod handlers;
 mod job;
+mod live;
 
 pub use bootstrap::{BootstrapError, build_engine};
 pub use engine::{Engine, EngineConfig, EngineEvent, EngineStatus, IdleOutcome, KeyStatus};
 pub use job::Job;
+pub use live::{LiveConfig, LiveGameView, LiveState, live_game_view, spawn_live};

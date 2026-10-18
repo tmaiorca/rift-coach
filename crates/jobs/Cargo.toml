@@ -9,6 +9,7 @@ publish.workspace = true
 rc-coach = { version = "0.1.0", path = "../coach" }
 rc-common = { version = "0.1.0", path = "../common" }
 rc-ddragon = { version = "0.1.0", path = "../ddragon" }
+rc-live = { version = "0.1.0", path = "../live" }
 rc-metrics = { version = "0.1.0", path = "../metrics" }
 rc-riot = { version = "0.1.0", path = "../riot" }
 rc-store = { version = "0.1.0", path = "../store" }

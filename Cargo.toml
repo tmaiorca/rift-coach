@@ -8,6 +8,7 @@ members = [
     "crates/metrics",
     "crates/ai",
     "crates/signals",
+    "crates/live",
     "crates/coach",
     "crates/jobs",
     "cli",

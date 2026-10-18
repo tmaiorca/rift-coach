@@ -41,6 +41,12 @@ pub enum Job {
         account_id: i64,
         scope: String,
     },
+    /// After a live game ends: find it in Match-V5 (it takes a few minutes
+    /// to appear), link it, and fetch it. Retries until Riot publishes it.
+    PostGame {
+        account_id: i64,
+        live_game_id: i64,
+    },
 }
 
 impl Job {
@@ -54,6 +60,7 @@ impl Job {
             Self::ComputeMetrics { .. } => "compute_metrics",
             Self::AiReview { .. } => "ai_review",
             Self::SessionReview { .. } => "session_review",
+            Self::PostGame { .. } => "post_game",
         }
     }
 
@@ -68,6 +75,7 @@ impl Job {
             Self::ComputeMetrics { match_id } => format!("metrics:{match_id}"),
             Self::AiReview { account_id, match_id } => format!("review:{account_id}:{match_id}"),
             Self::SessionReview { account_id, scope } => format!("session_review:{account_id}:{scope}"),
+            Self::PostGame { live_game_id, .. } => format!("post_game:{live_game_id}"),
         }
     }
 
@@ -75,6 +83,8 @@ impl Job {
     /// quickly and timelines follow.
     pub fn priority(&self) -> i32 {
         match self {
+            // The game you just played comes before any backfill.
+            Self::PostGame { .. } => 110,
             Self::ResolveAccount { .. } => 100,
             Self::SyncMatchList { .. } => 90,
             Self::DdragonSync { .. } => 80,
@@ -90,6 +100,8 @@ impl Job {
         match self {
             // A just-finished match can take several minutes to appear.
             Self::FetchMatch { .. } | Self::FetchTimeline { .. } => 8,
+            // With the default backoff this keeps looking for about 1.5 hours.
+            Self::PostGame { .. } => 10,
             Self::AiReview { .. } | Self::SessionReview { .. } => 3,
             _ => 5,
         }
@@ -106,6 +118,7 @@ impl Job {
             Self::ComputeMetrics { match_id } => format!("metrics {match_id}"),
             Self::AiReview { match_id, .. } => format!("AI review {match_id}"),
             Self::SessionReview { .. } => "AI session review".to_owned(),
+            Self::PostGame { .. } => "find your last game".to_owned(),
         }
     }
 
@@ -116,6 +129,7 @@ impl Job {
                 | Self::SyncMatchList { .. }
                 | Self::FetchMatch { .. }
                 | Self::FetchTimeline { .. }
+                | Self::PostGame { .. }
         )
     }
 }

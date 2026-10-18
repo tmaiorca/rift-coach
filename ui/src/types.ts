@@ -35,6 +35,8 @@ export interface FailedJob {
 export interface EngineStatus {
   key_status: KeyStatus;
   paused: boolean;
+  /** Queued work is held because a game is running. */
+  in_game: boolean;
   jobs: JobCounts;
   rate_limits: BucketSnapshot[];
   recent_failures: FailedJob[];
@@ -339,6 +341,13 @@ export interface AppSettings {
     background_champion: string | null;
     particles: boolean;
   };
+  live: {
+    enabled: boolean;
+    pause_background: boolean;
+    cs_target_pm: number | null;
+    keep_snapshots_days: number;
+    notify: boolean;
+  };
 }
 
 export interface ChampionEntry {
@@ -358,7 +367,10 @@ export type EngineEvent =
   | { type: "key_generation_changed"; key_gen_id: number }
   | { type: "metrics_computed"; match_id: string }
   | { type: "review_ready"; match_id: string; report_id: number }
-  | { type: "session_review_ready"; scope: string; report_id: number };
+  | { type: "session_review_ready"; scope: string; report_id: number }
+  | { type: "live_game_linked"; live_game_id: number; match_id: string }
+  | { type: "post_game_ready"; live_game_id: number; match_id: string; review_queued: boolean }
+  | { type: "in_game_changed"; in_game: boolean };
 
 // ---------- patterns (rc-signals via rc-coach) ----------
 
@@ -571,4 +583,159 @@ export interface AiUsage {
   reports_30d: number;
   tokens_30d: number;
   limit: number | null;
+}
+
+// ---------- live (rc-live via rc-jobs) ----------
+
+export type LivePhase = "idle" | "loading" | "in_game" | "ended";
+
+export interface LiveItem {
+  itemID: number;
+  count: number;
+  slot: number;
+}
+
+export interface OwnSnapshot {
+  riot_id: string;
+  champion_name: string;
+  champion_ddragon_id: string | null;
+  position: string;
+  game_mode: string;
+  map_number: number;
+  game_time_s: number;
+  level: number;
+  current_gold: number;
+  scores: { kills: number; deaths: number; assists: number; creepScore: number; wardScore: number };
+  items: LiveItem[];
+  is_dead: boolean;
+  game_end: string | null;
+}
+
+export interface CsTarget {
+  per_min: number;
+  source: "goal" | "setting" | "usual";
+}
+
+export interface Benchmark {
+  per_min: number;
+  label: string;
+}
+
+export interface PlannedItem {
+  item_id: number;
+  name: string;
+  total_gold: number;
+}
+
+export interface GoalReminder {
+  goal_id: number;
+  title: string;
+  metric: string;
+  label: string;
+  comparator: "at_most" | "at_least";
+  target: number;
+}
+
+export interface LiveContext {
+  account_id: number | null;
+  champion_id: number | null;
+  champion_ddragon_id: string | null;
+  role: string | null;
+  cs_target: CsTarget | null;
+  benchmark: Benchmark | null;
+  build: PlannedItem[];
+  build_source: "plan" | "usual" | null;
+  goals: GoalReminder[];
+  patch: string | null;
+}
+
+export interface Pacing {
+  cs: number;
+  cs_per_min: number;
+  target: CsTarget | null;
+  expected_cs: number | null;
+  diff: number | null;
+  benchmark: Benchmark | null;
+}
+
+export interface BuildProgress {
+  plan: { item_id: number; name: string; owned: boolean }[];
+  next: {
+    item_id: number;
+    name: string;
+    total_gold: number;
+    components_gold: number;
+    remaining_gold: number;
+    progress_pct: number;
+  } | null;
+}
+
+export interface GoalLive extends GoalReminder {
+  value: number | null;
+  pending: string | null;
+  met: boolean | null;
+}
+
+export interface Footprint {
+  samples: number;
+  cpu_avg_pct: number;
+  cpu_max_pct: number;
+  backend_cpu_avg_pct: number;
+  mem_max_mb: number;
+  backend_mem_max_mb: number;
+}
+
+export interface LiveState {
+  enabled: boolean;
+  phase: LivePhase;
+  live_game_id: number | null;
+  tracked: boolean;
+  snapshot: OwnSnapshot | null;
+  context: LiveContext | null;
+  pacing: Pacing | null;
+  build: BuildProgress | null;
+  goals: GoalLive[];
+  footprint: Footprint | null;
+  updated_ms: number;
+}
+
+export type LiveGameStatus =
+  "in_progress" | "not_tracked" | "not_published" | "waiting" | "analyzing" | "analyzed" | "reviewed";
+
+export interface LiveGameView {
+  id: number;
+  account_id: number | null;
+  champion_name: string;
+  champion_ddragon: string | null;
+  position: string | null;
+  game_mode: string;
+  started_at: number;
+  ended_at: number | null;
+  end_reason: "game_end" | "disappeared" | null;
+  result: "Win" | "Lose" | null;
+  duration_s: number | null;
+  match_id: string | null;
+  analyzed_at: number | null;
+  report_id: number | null;
+  snapshots_pruned: boolean;
+  status: LiveGameStatus;
+  last: OwnSnapshot | null;
+  footprint: Footprint | null;
+  budget_cpu_avg_pct: number;
+  budget_mem_mb: number;
+  within_budget: boolean | null;
+}
+
+export interface PlannerItem {
+  item_id: number;
+  name: string;
+  total_gold: number;
+  completed: boolean;
+}
+
+export interface BuildPlanView {
+  champion: string;
+  source: "plan" | "usual" | null;
+  items: PlannedItem[];
+  patch: string;
 }

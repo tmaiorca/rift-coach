@@ -11,6 +11,10 @@ import type {
   Goal,
   GoalInput,
   KeyStatus,
+  LiveGameView,
+  LiveState,
+  BuildPlanView,
+  PlannerItem,
   MatchDetail,
   MatchRow,
   MetricDef,
@@ -81,8 +85,20 @@ export const api = {
   spellIcon: (spellId: number, patch: string) => invoke<string>("spell_icon", { spellId, patch }),
   championSplash: (champion: string) => invoke<string>("champion_splash", { champion }),
   minimap: (patch: string) => invoke<string>("minimap", { patch }),
+
+  liveState: () => invoke<LiveState>("live_state"),
+  liveGames: (limit = 20) => invoke<LiveGameView[]>("live_games", { limit }),
+  plannerItems: () => invoke<{ patch: string; items: PlannerItem[] }>("planner_items"),
+  buildPlan: (champion: string) => invoke<BuildPlanView>("build_plan", { champion }),
+  setBuildPlan: (champion: string, items: number[]) =>
+    invoke<BuildPlanView>("set_build_plan", { champion, items }),
+  openLiveWindow: () => invoke<void>("open_live_window"),
 };
 
 export function onEngineEvent(handler: (e: EngineEvent) => void): Promise<UnlistenFn> {
   return listen<EngineEvent>("engine-event", (msg) => handler(msg.payload));
+}
+
+export function onLiveUpdate(handler: (s: LiveState) => void): Promise<UnlistenFn> {
+  return listen<LiveState>("live-update", (msg) => handler(msg.payload));
 }

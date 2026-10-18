@@ -18,6 +18,10 @@ const MATCH_PAGE: u32 = 100;
 const AUTO_REVIEW_MAX_AGE_MS: i64 = 6 * 3600 * 1000;
 /// Auto session reviews only cover sessions that ended this recently.
 const AUTO_SESSION_MAX_AGE_MS: i64 = 24 * 3600 * 1000;
+/// A live game is the Match-V5 game that started within this of it (the
+/// live start time is estimated from the game clock).
+const LIVE_MATCH_WINDOW_MS: i64 = 5 * 60 * 1000;
+const DAY_MS: i64 = 24 * 3600 * 1000;
 
 #[derive(Debug)]
 pub(crate) enum JobError {
@@ -67,7 +71,95 @@ impl Engine {
             Job::ComputeMetrics { match_id } => self.compute_metrics(match_id).await,
             Job::AiReview { account_id, match_id } => self.ai_review(*account_id, match_id).await,
             Job::SessionReview { account_id, scope } => self.session_review(*account_id, scope).await,
+            Job::PostGame { account_id, live_game_id } => self.post_game(*account_id, *live_game_id).await,
         }
+    }
+
+    async fn post_game(&self, account_id: i64, live_game_id: i64) -> JobResult {
+        let live = self
+            .db
+            .call(move |c| rc_store::live::get(c, live_game_id))
+            .await?
+            .ok_or_else(|| JobError::Permanent(format!("live game {live_game_id} no longer exists")))?;
+        if live.match_id.is_some() || self.link_live_game(account_id, &live).await? {
+            return Ok(());
+        }
+        let (account, puuid) = self
+            .db
+            .call(move |c| Ok((accounts::get_account(c, account_id)?, accounts::current_puuid(c, account_id)?)))
+            .await?;
+        let account = account.ok_or_else(|| JobError::Permanent(format!("account {account_id} no longer exists")))?;
+        let Some(puuid) = puuid else {
+            self.enqueue(Job::ResolveAccount { account_id, then_sync: None }).await?;
+            return Err(JobError::Retry("resolving your account first".into()));
+        };
+        let platform: Platform = account.platform.parse().map_err(JobError::Permanent)?;
+        let query = MatchIdQuery {
+            start: 0,
+            count: 5,
+            start_time_s: Some((live.started_at - 30 * 60_000) / 1000),
+            ..Default::default()
+        };
+        for id in self.riot.match_ids(platform.match_region(), &puuid, &query).await? {
+            // Idempotent: stores the match and queues its timeline and metrics.
+            self.fetch_match(&id).await?;
+        }
+        if self.link_live_game(account_id, &live).await? {
+            Ok(())
+        } else {
+            Err(JobError::Retry("Riot hasn't published the game yet".into()))
+        }
+    }
+
+    /// Links a live game to the stored match that started at about the same
+    /// time. Returns whether it found one.
+    async fn link_live_game(&self, account_id: i64, live: &rc_store::live::LiveGame) -> Result<bool, JobError> {
+        let (live_game_id, started_at) = (live.id, live.started_at);
+        let found = self
+            .db
+            .call(move |c| {
+                let m = rc_store::live::unlinked_match_near(c, account_id, started_at, LIVE_MATCH_WINDOW_MS)?;
+                let Some(m) = m else { return Ok(None) };
+                rc_store::live::link_match(c, live_game_id, &m)?;
+                let has_timeline = matches::has_timeline(c, &m)?;
+                Ok(Some((m, has_timeline)))
+            })
+            .await?;
+        let Some((match_id, has_timeline)) = found else { return Ok(false) };
+        tracing::info!(live_game_id, match_id, "live game linked");
+        self.emit(EngineEvent::LiveGameLinked { live_game_id, match_id: match_id.clone() });
+        // A sync may have stored it already; make sure it gets analyzed.
+        self.enqueue(if has_timeline { Job::ComputeMetrics { match_id } } else { Job::FetchTimeline { match_id } })
+            .await?;
+        Ok(true)
+    }
+
+    /// Marks a live game's match analyzed and announces it (once).
+    async fn maybe_post_game_ready(&self, match_id: &str, review_queued: bool) -> JobResult {
+        let id = match_id.to_owned();
+        let marked = self
+            .db
+            .call(move |c| {
+                let Some(g) = rc_store::live::by_match(c, &id)? else { return Ok(None) };
+                Ok(rc_store::live::mark_analyzed(c, g.id, rc_common::time::now_ms())?.then_some(g.id))
+            })
+            .await?;
+        if let Some(live_game_id) = marked {
+            self.emit(EngineEvent::PostGameReady { live_game_id, match_id: match_id.to_owned(), review_queued });
+            self.prune_live_snapshots().await?;
+        }
+        Ok(())
+    }
+
+    /// Deletes live snapshots past the retention setting.
+    pub(crate) async fn prune_live_snapshots(&self) -> Result<usize, rc_store::StoreError> {
+        self.db
+            .call(|c| {
+                let days = i64::from(rc_store::settings::app(c)?.live.keep_snapshots_days);
+                let now = rc_common::time::now_ms();
+                rc_store::live::prune_snapshots(c, now - days * DAY_MS, now - days.max(1) * DAY_MS)
+            })
+            .await
     }
 
     async fn resolve_account(&self, account_id: i64, then_sync: Option<u32>) -> JobResult {
@@ -284,14 +376,15 @@ impl Engine {
             .await?;
         self.emit(EngineEvent::MetricsComputed { match_id: match_id.to_owned() });
         if timeline.is_some() {
-            self.maybe_queue_auto_review(match_id).await?;
+            let review_queued = self.maybe_queue_auto_review(match_id).await?;
+            self.maybe_post_game_ready(match_id, review_queued).await?;
         }
         Ok(())
     }
 
     /// Queues an automatic review for a fresh game of the active account if
-    /// the setting is on. Never for backfilled history.
-    async fn maybe_queue_auto_review(&self, match_id: &str) -> JobResult {
+    /// the setting is on. Never for backfilled history. Returns whether it did.
+    async fn maybe_queue_auto_review(&self, match_id: &str) -> Result<bool, JobError> {
         let id = match_id.to_owned();
         let target = self
             .db
@@ -318,7 +411,7 @@ impl Engine {
         if let Some(account_id) = target {
             self.enqueue(Job::AiReview { account_id, match_id: match_id.to_owned() }).await?;
         }
-        Ok(())
+        Ok(target.is_some())
     }
 
     async fn ai_review(&self, account_id: i64, match_id: &str) -> JobResult {
@@ -331,6 +424,15 @@ impl Engine {
         let opts = rc_coach::review::ReviewOptions::from_settings(&settings, false);
         match rc_coach::review::post_game_review(&self.db, &client, account_id, match_id, &opts, items).await {
             Ok(report) => {
+                let (id, report_id) = (match_id.to_owned(), report.id);
+                self.db
+                    .call(move |c| {
+                        if let Some(g) = rc_store::live::by_match(c, &id)?.filter(|g| g.report_id.is_none()) {
+                            rc_store::live::set_report(c, g.id, report_id)?;
+                        }
+                        Ok(())
+                    })
+                    .await?;
                 self.emit(EngineEvent::ReviewReady { match_id: match_id.to_owned(), report_id: report.id });
                 Ok(())
             }

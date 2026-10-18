@@ -12,12 +12,14 @@ interface Props {
   particles: boolean;
   /** 0–1 */
   intensity: number;
+  /** Freeze all motion (a game is running: keep the GPU and CPU for it). */
+  still?: boolean;
 }
 
-export function AmbientBackground({ champion, enabled, particles, intensity }: Props) {
+export function AmbientBackground({ champion, enabled, particles, intensity, still = false }: Props) {
   const splash = useSplash(enabled ? champion : null);
   const reduced = usePrefersReducedMotion();
-  const animate = enabled && !reduced;
+  const animate = enabled && !reduced && !still;
   const parallaxRef = useRef<HTMLDivElement>(null);
 
   // Smoothed mouse parallax on the splash layer.

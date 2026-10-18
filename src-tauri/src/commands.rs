@@ -526,6 +526,12 @@ pub async fn save_settings(state: State<'_, AppState>, new: AppSettings) -> CmdR
     if new.ai.monthly_token_limit.is_some_and(|l| l < 10_000) {
         return Err("A token cap below 10,000 would block most reviews; use at least 10,000 or no cap.".into());
     }
+    if new.live.cs_target_pm.is_some_and(|t| !(1.0..=15.0).contains(&t)) {
+        return Err("The CS per minute target must be between 1 and 15.".into());
+    }
+    if new.live.keep_snapshots_days > 365 {
+        return Err("Live snapshots can be kept for at most 365 days.".into());
+    }
     new.ai.provider.parse::<ProviderKind>()?;
     state
         .engine
@@ -649,4 +655,109 @@ pub async fn minimap(state: State<'_, AppState>, patch: String) -> CmdResult<Str
     let dd = state.engine.ddragon();
     let version = dd.version_for_patch(&patch).await.map_err(err)?;
     data_url(&dd.minimap(&version).await.map_err(err)?, "image/png").await
+}
+
+// ---------- live ----------
+
+#[tauri::command]
+pub fn live_state(state: State<'_, AppState>) -> rc_jobs::LiveState {
+    state.live.borrow().clone()
+}
+
+/// Recently recorded live games, newest first.
+#[tauri::command]
+pub async fn live_games(state: State<'_, AppState>, limit: u32) -> CmdResult<Vec<rc_jobs::LiveGameView>> {
+    let rows = state.engine.db().call(move |c| rc_store::live::recent(c, limit.clamp(1, 200))).await.map_err(err)?;
+    Ok(rows.into_iter().map(rc_jobs::live_game_view).collect())
+}
+
+/// Item data for the newest stored patch (what the live view uses).
+async fn current_catalog(state: &AppState) -> CmdResult<(String, std::sync::Arc<rc_metrics::ItemCatalog>)> {
+    let patch = state
+        .engine
+        .db()
+        .call(|c| matches::latest_patch(c))
+        .await
+        .map_err(err)?
+        .ok_or("No games stored yet, so there's no item data. Sync your games first.")?;
+    let catalog = state.engine.item_catalog(&patch).await.map_err(err)?;
+    Ok((patch, catalog))
+}
+
+#[derive(Serialize)]
+pub struct PlannerView {
+    pub patch: String,
+    pub items: Vec<rc_coach::live::PlannerItem>,
+}
+
+#[tauri::command]
+pub async fn planner_items(state: State<'_, AppState>) -> CmdResult<PlannerView> {
+    let (patch, catalog) = current_catalog(&state).await?;
+    Ok(PlannerView { items: rc_coach::live::planner_items(&catalog), patch })
+}
+
+#[derive(Serialize)]
+pub struct BuildPlanView {
+    pub champion: String,
+    /// `plan` (saved), `usual` (your most common items), or `None` (nothing to go on).
+    pub source: Option<&'static str>,
+    pub items: Vec<rc_live::view::PlannedItem>,
+    pub patch: String,
+}
+
+/// The planned build for a champion (Data Dragon id): saved, else your usual.
+#[tauri::command]
+pub async fn build_plan(state: State<'_, AppState>, champion: String) -> CmdResult<BuildPlanView> {
+    let (patch, catalog) = current_catalog(&state).await?;
+    let account_id = active_account_id(&state).await.ok();
+    let (champ, cat) = (champion.clone(), catalog.clone());
+    let (ids, source) = state
+        .engine
+        .db()
+        .call(move |c| {
+            if let Some(ids) = rc_store::live::build_plan(c, &champ)? {
+                return Ok(Ok((ids, Some("plan"))));
+            }
+            let Some(a) = account_id else { return Ok(Ok((Vec::new(), None))) };
+            Ok(rc_coach::live::usual_build(c, a, &champ, &cat).map(|ids| {
+                let source = (!ids.is_empty()).then_some("usual");
+                (ids, source)
+            }))
+        })
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+    Ok(BuildPlanView { champion, source, items: rc_coach::live::planned(&ids, &catalog), patch })
+}
+
+/// Saves a planned build (empty = back to your usual build).
+#[tauri::command]
+pub async fn set_build_plan(state: State<'_, AppState>, champion: String, items: Vec<i32>) -> CmdResult<BuildPlanView> {
+    if items.len() > 8 {
+        return Err("A build plan holds at most 8 items.".into());
+    }
+    let (_, catalog) = current_catalog(&state).await?;
+    if let Some(bad) = items.iter().find(|id| !catalog.get(**id).is_some_and(|i| i.plannable)) {
+        return Err(format!("Item {bad} can't go in a build plan."));
+    }
+    let champ = champion.clone();
+    state.engine.db().call(move |c| rc_store::live::set_build_plan(c, &champ, &items)).await.map_err(err)?;
+    build_plan(state, champion).await
+}
+
+/// Opens (or brings back) the compact live window for a second monitor.
+#[tauri::command]
+pub async fn open_live_window(app: tauri::AppHandle) -> CmdResult<()> {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("live") {
+        w.unminimize().map_err(err)?;
+        return w.set_focus().map_err(err);
+    }
+    tauri::WebviewWindowBuilder::new(&app, "live", tauri::WebviewUrl::App("index.html".into()))
+        .title("Rift Coach · Live")
+        .inner_size(380.0, 660.0)
+        .min_inner_size(320.0, 420.0)
+        .build()
+        .map_err(err)?;
+    Ok(())
 }
