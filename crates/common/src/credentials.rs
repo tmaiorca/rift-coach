@@ -14,6 +14,8 @@ const SERVICE: &str = "RiftCoach";
 
 /// Credential name for the Riot API key.
 pub const RIOT_API_KEY: &str = "riot_api_key";
+/// Credential name for the MCP server's access token.
+pub const MCP_TOKEN: &str = "mcp_token";
 
 #[derive(Debug, thiserror::Error)]
 pub enum CredentialError {

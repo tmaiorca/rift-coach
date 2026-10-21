@@ -103,8 +103,9 @@ pub fn context(
     // collected, else the top 30% of your own lobbies.
     if let Some(role) = role {
         let patch = crate::benchmarks::current_patch(conn)?;
+        let tier = crate::benchmarks::effective_tier(conn, settings)?;
         let (role_pop, champ_pop) =
-            crate::benchmarks::populations(conn, &settings.benchmarks.tier, patch.as_deref(), role, input.champion)?;
+            crate::benchmarks::populations(conn, &tier, patch.as_deref(), role, input.champion)?;
         if let Some(b) = champ_pop.or(role_pop)
             && let Some(v) = b.pop.get("cspm").filter(|v| v.len() >= crate::benchmarks::MIN_CHAMPION_SAMPLE)
         {

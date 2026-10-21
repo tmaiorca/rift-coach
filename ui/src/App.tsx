@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, inTauri, onEngineEvent, onLiveUpdate } from "./api";
 import { AmbientBackground } from "./components/AmbientBackground";
+import { Setup } from "./components/Setup";
 import { StatusBar } from "./components/StatusBar";
 import { ChampionsContext } from "./lib/assets";
 import { Dashboard } from "./pages/Dashboard";
@@ -11,6 +12,7 @@ import { MatchDetail } from "./pages/MatchDetail";
 import { Matches } from "./pages/Matches";
 import { Patterns } from "./pages/Patterns";
 import { Benchmarks } from "./pages/Benchmarks";
+import { Champions } from "./pages/Champions";
 import { Players } from "./pages/Players";
 import { Weekly } from "./pages/Weekly";
 import { Reports } from "./pages/Reports";
@@ -26,6 +28,7 @@ import type {
   GoalInput,
   MatchRow,
   StatusView,
+  UpdateInfo,
 } from "./types";
 
 type Page =
@@ -33,6 +36,7 @@ type Page =
   | "live"
   | "matches"
   | "match"
+  | "champions"
   | "patterns"
   | "sessions"
   | "weekly"
@@ -47,6 +51,7 @@ const NAV: { id: Page; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: "◈" },
   { id: "live", label: "Live", icon: "◉" },
   { id: "matches", label: "Matches", icon: "☰" },
+  { id: "champions", label: "Champions", icon: "♛" },
   { id: "patterns", label: "Patterns", icon: "⌖" },
   { id: "sessions", label: "Sessions", icon: "◷" },
   { id: "weekly", label: "Weekly", icon: "▦" },
@@ -67,6 +72,7 @@ interface UiState {
   matchId: string | null;
   sessionScope?: string | null;
   week?: string | null;
+  champion?: string | null;
 }
 
 export function App() {
@@ -87,6 +93,8 @@ function Shell() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [livePhase, setLivePhase] = useState<LivePhase>("idle");
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updating, setUpdating] = useState(false);
   const refreshTimer = useRef<number | undefined>(undefined);
   const mainRef = useRef<HTMLElement>(null);
 
@@ -106,7 +114,14 @@ function Shell() {
 
   useEffect(() => {
     api.getStatus().then(setStatus, (e) => setError(String(e)));
-    api.getSettings().then(setSettings, (e) => setError(String(e)));
+    api.getSettings().then(
+      (s) => {
+        setSettings(s);
+        // Quietly: no release yet, offline, etc. aren't worth a banner.
+        if (s.desktop.check_updates) api.checkUpdate().then(setUpdate, () => {});
+      },
+      (e) => setError(String(e)),
+    );
     api.getUiState().then(
       (s) =>
         setUi({
@@ -114,6 +129,7 @@ function Shell() {
           matchId: (s?.matchId as string) ?? null,
           sessionScope: (s?.sessionScope as string) ?? null,
           week: (s?.week as string) ?? null,
+          champion: (s?.champion as string) ?? null,
         }),
       () => setUi({ page: "dashboard", matchId: null }),
     );
@@ -176,6 +192,8 @@ function Shell() {
     setUi((u) => ({ ...u, page: "sessions", matchId: u?.matchId ?? null, sessionScope: scope }));
   const openWeek = (week: string | null) =>
     setUi((u) => ({ ...u, page: "weekly", matchId: u?.matchId ?? null, week }));
+  const openChampion = (champion: string | null) =>
+    setUi((u) => ({ ...u, page: "champions", matchId: u?.matchId ?? null, champion }));
   const draftGoal = (draft: GoalInput) => {
     setGoalDraft(draft);
     go("goals");
@@ -267,6 +285,24 @@ function Shell() {
             onReloadKey={async () => (await api.reloadKey(), refreshStatus())}
             onOpenSettings={() => go("settings")}
           />
+          {update && (
+            <div className="banner update">
+              Rift Coach {update.version} is available (you have {update.current_version}).{" "}
+              <button
+                className="small"
+                disabled={updating}
+                onClick={() => {
+                  setUpdating(true);
+                  api.installUpdate().catch((e) => (setError(String(e)), setUpdating(false)));
+                }}
+              >
+                {updating ? "Installing…" : "Install and restart"}
+              </button>{" "}
+              <button className="link" onClick={() => setUpdate(null)}>
+                Later
+              </button>
+            </div>
+          )}
           {error && (
             <div className="banner error" onClick={() => setError(null)}>
               {error}
@@ -320,6 +356,15 @@ function Shell() {
                 onWeek={openWeek}
                 onOpenSettings={() => go("settings")}
                 onTrackFocus={draftGoal}
+              />
+            )}
+            {page === "champions" && (
+              <Champions
+                refreshKey={refreshKey}
+                champion={ui.champion ?? null}
+                onChampion={openChampion}
+                onOpenMatch={openMatch}
+                onMakeGoal={draftGoal}
               />
             )}
             {page === "benchmarks" && (
@@ -380,6 +425,19 @@ function Shell() {
           </main>
         </div>
       </div>
+      {!settings.desktop.onboarded && (
+        <Setup
+          settings={settings}
+          status={status}
+          onSave={saveSettings}
+          onKeyChanged={() => void refreshStatus()}
+          onAccountAdded={() => {
+            void refreshStatus();
+            refreshData();
+          }}
+          onDone={() => go("dashboard")}
+        />
+      )}
     </ChampionsContext.Provider>
   );
 }

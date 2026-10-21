@@ -7,20 +7,27 @@ publish.workspace = true
 
 [dependencies]
 base64 = "0.23.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+getrandom = "0.3"
 rc-ai = { version = "0.1.0", path = "../crates/ai" }
 rc-coach = { version = "0.1.0", path = "../crates/coach" }
 rc-common = { version = "0.1.0", path = "../crates/common" }
 rc-ddragon = { version = "0.1.0", path = "../crates/ddragon" }
 rc-jobs = { version = "0.1.0", path = "../crates/jobs" }
 rc-live = { version = "0.1.0", path = "../crates/live" }
+rc-mcp = { version = "0.1.0", path = "../crates/mcp" }
 rc-metrics = { version = "0.1.0", path = "../crates/metrics" }
 rc-riot = { version = "0.1.0", path = "../crates/riot" }
 rc-store = { version = "0.1.0", path = "../crates/store" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-tauri = { version = "2.12.4", features = [] }
+tauri = { version = "2.12.4", features = ["tray-icon"] }
+tauri-plugin-autostart = "2.7.0"
+tauri-plugin-dialog = "2.8.3"
 tauri-plugin-notification = "2.3.1"
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2.5.4"
+tauri-plugin-updater = "2.14.0"
 tauri-plugin-window-state = "2.5.0"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "sync", "macros", "time"] }
 tracing = "0.1.44"

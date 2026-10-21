@@ -3,7 +3,9 @@
 
 pub mod analysis;
 pub mod benchmarks;
+pub mod champions;
 pub mod detail;
+pub mod export;
 pub mod facts;
 pub mod goals;
 pub mod live;

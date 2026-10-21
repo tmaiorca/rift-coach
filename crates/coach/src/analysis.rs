@@ -85,7 +85,7 @@ pub fn compare_metrics(
     };
     let (bench_role, bench_champ) = match role {
         Some(r) => {
-            let tier = rc_store::settings::app(conn)?.benchmarks.tier;
+            let tier = crate::benchmarks::effective_tier(conn, &rc_store::settings::app(conn)?)?;
             let patch = rc_store::matches::patch_of_match(conn, match_id)?;
             crate::benchmarks::populations(conn, &tier, patch.as_deref(), r, Some(champion_name))?
         }

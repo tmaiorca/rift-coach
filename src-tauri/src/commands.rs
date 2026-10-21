@@ -25,9 +25,9 @@ use tauri::State;
 
 use crate::AppState;
 
-type CmdResult<T> = Result<T, String>;
+pub type CmdResult<T> = Result<T, String>;
 
-fn err(e: impl std::fmt::Display) -> String {
+pub fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
@@ -41,7 +41,7 @@ fn active_account(c: &Connection) -> rc_store::Result<Option<Account>> {
     accounts::primary_account(c)
 }
 
-async fn active_account_id(state: &AppState) -> CmdResult<i64> {
+pub async fn active_account_id(state: &AppState) -> CmdResult<i64> {
     state
         .engine
         .db()
@@ -530,7 +530,7 @@ pub async fn save_settings(state: State<'_, AppState>, new: AppSettings) -> CmdR
         return Err("The CS per minute target must be between 1 and 15.".into());
     }
     if !rc_store::settings::BENCHMARK_TIERS.contains(&new.benchmarks.tier.as_str()) {
-        return Err("Benchmark tier must be Emerald, Diamond or Master+.".into());
+        return Err("Benchmark tier must be Auto, Gold, Platinum, Emerald, Diamond or Master+.".into());
     }
     if !(2..=60).contains(&new.benchmarks.step_seconds) {
         return Err("Benchmark collection speed must be between 2 and 60 seconds per step.".into());
@@ -542,19 +542,30 @@ pub async fn save_settings(state: State<'_, AppState>, new: AppSettings) -> CmdR
         return Err("Live snapshots can be kept for at most 365 days.".into());
     }
     new.ai.provider.parse::<ProviderKind>()?;
-    state
+    if new.mcp.port < 1024 {
+        return Err("Use an MCP port of 1024 or higher.".into());
+    }
+    let saved = state
         .engine
         .db()
         .call(move |c| {
             // A new tier starts its own sample; drop ids queued for the old one.
-            if settings::app(c)?.benchmarks.tier != new.benchmarks.tier {
+            let old = settings::app(c)?;
+            if rc_coach::benchmarks::effective_tier(c, &old)? != rc_coach::benchmarks::effective_tier(c, &new)? {
                 rc_store::bench::clear_pending(c)?;
             }
+            let mcp_changed = old.mcp != new.mcp;
             settings::set(c, settings::APP, &new)?;
-            settings::app(c)
+            Ok((settings::app(c)?, mcp_changed))
         })
         .await
-        .map_err(err)
+        .map_err(err)?;
+    let (saved, mcp_changed) = saved;
+    crate::desktop::apply_settings(&state, &saved);
+    if mcp_changed {
+        crate::mcp_host::apply(&state).await;
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -827,6 +838,32 @@ pub async fn benchmark_gaps(
 pub async fn ranks(state: State<'_, AppState>) -> CmdResult<Vec<rc_store::bench::Rank>> {
     let Ok(account_id) = active_account_id(&state).await else { return Ok(vec![]) };
     state.engine.db().call(move |c| rc_store::bench::ranks(c, account_id)).await.map_err(err)
+}
+
+// ---------- champions ----------
+
+#[tauri::command]
+pub async fn champion_list(state: State<'_, AppState>) -> CmdResult<Vec<rc_coach::champions::ChampionSummary>> {
+    let Ok(account_id) = active_account_id(&state).await else { return Ok(vec![]) };
+    state.engine.db().call(move |c| rc_coach::champions::list(c, account_id, &settings::app(c)?)).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn champion_detail(
+    state: State<'_, AppState>,
+    champion: String,
+) -> CmdResult<rc_coach::champions::ChampionDetail> {
+    let account_id = active_account_id(&state).await?;
+    state
+        .engine
+        .db()
+        .call(move |c| {
+            let s = settings::app(c)?;
+            Ok(rc_coach::champions::detail(c, account_id, &champion, &s))
+        })
+        .await
+        .map_err(err)?
+        .map_err(err)
 }
 
 // ---------- weekly ----------

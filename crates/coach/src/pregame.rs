@@ -238,8 +238,8 @@ pub fn brief(conn: &Connection, input: &BriefInput) -> Result<Brief, CoachError>
     let (mut benchmark_label, mut targets) = (None, Vec::new());
     if let Some(r) = &role {
         let patch = crate::benchmarks::current_patch(conn)?;
-        let (role_pop, champ_pop) =
-            crate::benchmarks::populations(conn, &settings.benchmarks.tier, patch.as_deref(), r, Some(&champion))?;
+        let tier = crate::benchmarks::effective_tier(conn, &settings)?;
+        let (role_pop, champ_pop) = crate::benchmarks::populations(conn, &tier, patch.as_deref(), r, Some(&champion))?;
         if let Some(b) = champ_pop.or(role_pop) {
             for k in TARGET_METRICS {
                 let (Some(d), Some(v)) = (defs::get(k), b.pop.get(k)) else { continue };

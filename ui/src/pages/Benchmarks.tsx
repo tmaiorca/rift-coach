@@ -25,6 +25,13 @@ export function Benchmarks({
   const [champion, setChampion] = useState<string | null>(null);
   const [gaps, setGaps] = useState<GapsView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [played, setPlayed] = useState<string[]>([]);
+  useEffect(() => {
+    api.championList().then(
+      (l) => setPlayed(l.slice(0, 15).map((c) => c.champion)),
+      () => {},
+    );
+  }, [refreshKey]);
 
   useEffect(() => {
     const load = () => api.benchmarkStatus().then(setStatus, (e) => setError(String(e)));
@@ -52,6 +59,12 @@ export function Benchmarks({
           </button>
         </div>
         <p className="muted">
+          {p?.auto && (
+            <>
+              Comparing with <b>{p.tier_label}</b>, picked automatically two tiers above your solo rank
+              (change it in Settings).{" "}
+            </>
+          )}
           Rift Coach samples recent solo queue games of {p?.tier_label ?? "higher-ranked"} players in the
           background (never during a game, never while your own games are downloading, and at well under half
           your Riot key's limit), runs the same metrics on them, and compares your numbers with theirs, patch
@@ -115,7 +128,7 @@ export function Benchmarks({
             aria-label="Champion"
           >
             <option value="">Any champion</option>
-            {p?.focus.champions.map((ch) => (
+            {[...new Set([...(p?.focus.champions ?? []), ...played])].map((ch) => (
               <option key={ch} value={ch}>
                 {ch}
               </option>

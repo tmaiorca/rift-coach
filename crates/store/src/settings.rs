@@ -49,6 +49,8 @@ pub struct AppSettings {
     pub appearance: AppearanceSettings,
     pub live: LiveSettings,
     pub benchmarks: BenchmarkSettings,
+    pub desktop: DesktopSettings,
+    pub mcp: McpSettings,
 }
 
 impl Default for AppSettings {
@@ -63,6 +65,8 @@ impl Default for AppSettings {
             appearance: AppearanceSettings::default(),
             live: LiveSettings::default(),
             benchmarks: BenchmarkSettings::default(),
+            desktop: DesktopSettings::default(),
+            mcp: McpSettings::default(),
         }
     }
 }
@@ -72,7 +76,8 @@ impl Default for AppSettings {
 pub struct BenchmarkSettings {
     /// Collect higher-rank games in the background (never during a game).
     pub enabled: bool,
-    /// `EMERALD`, `DIAMOND` or `MASTER` (Master and above).
+    /// `AUTO` (two tiers above your solo rank), `GOLD`, `PLATINUM`, `EMERALD`,
+    /// `DIAMOND` or `MASTER` (Master and above).
     pub tier: String,
     /// Champions to sample first (Data Dragon ids). Empty = your most played.
     pub champions: Vec<String>,
@@ -84,11 +89,49 @@ pub struct BenchmarkSettings {
 
 impl Default for BenchmarkSettings {
     fn default() -> Self {
-        Self { enabled: true, tier: "DIAMOND".into(), champions: Vec::new(), step_seconds: 5, max_games: 2000 }
+        Self { enabled: true, tier: "AUTO".into(), champions: Vec::new(), step_seconds: 5, max_games: 2000 }
     }
 }
 
-pub const BENCHMARK_TIERS: [&str; 3] = ["EMERALD", "DIAMOND", "MASTER"];
+pub const BENCHMARK_TIERS: [&str; 6] = ["AUTO", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER"];
+
+/// Window, tray, startup and update behavior. "Start with Windows" isn't
+/// here: Windows itself (the Run registry key) is the source of truth.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct DesktopSettings {
+    /// Closing the window keeps Rift Coach running in the tray (so it can
+    /// catch your next game).
+    pub close_to_tray: bool,
+    /// Look for a new version on start (GitHub releases).
+    pub check_updates: bool,
+    /// The first-run setup was finished or skipped.
+    pub onboarded: bool,
+}
+
+impl Default for DesktopSettings {
+    fn default() -> Self {
+        Self { close_to_tray: true, check_updates: true, onboarded: false }
+    }
+}
+
+/// The read-only MCP server for AI agents (Claude Desktop, your own agent).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct McpSettings {
+    pub enabled: bool,
+    pub port: u16,
+    /// Listen on your local network too (always with the access token).
+    pub lan: bool,
+    /// Require the access token on this PC too.
+    pub require_token_local: bool,
+}
+
+impl Default for McpSettings {
+    fn default() -> Self {
+        Self { enabled: false, port: 7337, lan: false, require_token_local: false }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -190,8 +233,9 @@ mod tests {
             assert_eq!(s.ai.monthly_token_limit, None);
             assert!(s.live.enabled && s.live.pause_background);
             assert_eq!(s.live.keep_snapshots_days, 7);
-            assert_eq!(s.benchmarks.tier, "DIAMOND");
+            assert_eq!(s.benchmarks.tier, "AUTO");
             assert!(s.benchmarks.enabled && !s.ai.auto_weekly && !s.ai.auto_pregame);
+            assert!(s.desktop.close_to_tray && !s.desktop.onboarded && !s.mcp.enabled && !s.mcp.lan);
             Ok(())
         })
         .expect("ok");

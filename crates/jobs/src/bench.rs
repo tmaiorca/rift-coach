@@ -157,7 +157,6 @@ impl Collector {
             return Ok(Outcome::Wait(BenchPhase::Waiting, "Your own downloads go first".into()));
         }
 
-        let tier = settings.benchmarks.tier.clone();
         let s = settings.clone();
         let (account, key_gen, progress) = db
             .call(move |c| {
@@ -174,6 +173,7 @@ impl Collector {
         let (Some(account), Some(key_gen), Some(patch)) = (account, key_gen, progress.patch.clone()) else {
             return Ok(Outcome::Wait(BenchPhase::NothingToDo, "Add your Riot ID and sync your games first".into()));
         };
+        let tier = progress.tier.clone();
         if progress.focus.roles.is_empty() {
             return Ok(Outcome::Wait(BenchPhase::NothingToDo, "No Summoner's Rift games yet".into()));
         }

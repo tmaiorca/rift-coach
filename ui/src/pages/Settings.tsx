@@ -1,7 +1,15 @@
 import { useContext, useEffect, useState } from "react";
 import { api } from "../api";
 import { ChampionsContext } from "../lib/assets";
-import type { AiUsage, AppSettings, ProviderId, ProviderInfo, StatusView } from "../types";
+import type {
+  AiUsage,
+  AppSettings,
+  McpStatus,
+  ProviderId,
+  ProviderInfo,
+  StatusView,
+  UpdateInfo,
+} from "../types";
 
 interface Props {
   settings: AppSettings;
@@ -42,7 +50,10 @@ export function Settings({ settings, status, onSave, onKeyChanged }: Props) {
       <AiSection settings={settings} save={save} />
       <LiveSection settings={settings} save={save} />
       <BenchmarkSection settings={settings} save={save} />
+      <DesktopSection settings={settings} save={save} />
+      <McpSection settings={settings} save={save} />
       <DataSection settings={settings} save={save} status={status} />
+      <DataTools />
       <Appearance settings={settings} save={save} />
     </div>
   );
@@ -361,6 +372,9 @@ function TokenCap({ settings, save }: { settings: AppSettings; save: Save }) {
 }
 
 const TIERS: { id: AppSettings["benchmarks"]["tier"]; label: string }[] = [
+  { id: "AUTO", label: "Auto: two tiers above your solo rank" },
+  { id: "GOLD", label: "Gold" },
+  { id: "PLATINUM", label: "Platinum" },
   { id: "EMERALD", label: "Emerald" },
   { id: "DIAMOND", label: "Diamond" },
   { id: "MASTER", label: "Master and above" },
@@ -604,6 +618,274 @@ function DataSection({
   );
 }
 
+function DesktopSection({ settings, save }: { settings: AppSettings; save: Save }) {
+  const d = settings.desktop;
+  const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [update, setUpdate] = useState<UpdateInfo | null | undefined>(undefined);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.autostartEnabled().then(setAutostart, () => setAutostart(false));
+  }, []);
+  const check = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      setUpdate(await api.checkUpdate());
+    } catch (e) {
+      setMsg(`Couldn't check for updates: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const install = async () => {
+    setBusy(true);
+    setMsg("Downloading the update… Rift Coach restarts when it's installed.");
+    try {
+      await api.installUpdate();
+    } catch (e) {
+      setMsg(String(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="panel">
+      <h2>Desktop</h2>
+      <Toggle
+        label="Start with Windows"
+        hint="Starts in the tray when you sign in, so your games are tracked without opening anything."
+        checked={autostart ?? false}
+        onChange={(v) => api.setAutostart(v).then(setAutostart, (e) => setMsg(String(e)))}
+      />
+      <Toggle
+        label="Keep running in the tray when the window is closed"
+        hint="Needed to catch games and write post-game analysis while the window is closed. Quit from the tray icon."
+        checked={d.close_to_tray}
+        onChange={(v) => save((s) => ({ ...s, desktop: { ...s.desktop, close_to_tray: v } }))}
+      />
+      <Toggle
+        label="Check for updates on start"
+        hint="Only signed Rift Coach releases are installed, and only when you click Install."
+        checked={d.check_updates}
+        onChange={(v) => save((s) => ({ ...s, desktop: { ...s.desktop, check_updates: v } }))}
+      />
+      <div className="form-row">
+        <button className="secondary" disabled={busy} onClick={check}>
+          Check for updates now
+        </button>
+        {update && (
+          <button disabled={busy} onClick={install}>
+            Install {update.version} and restart
+          </button>
+        )}
+        {update === null && <span className="muted">You're on the latest version.</span>}
+      </div>
+      {update?.notes && <p className="muted small-text pre-wrap">{update.notes}</p>}
+      {msg && <p className="muted">{msg}</p>}
+    </section>
+  );
+}
+
+function McpSection({ settings, save }: { settings: AppSettings; save: Save }) {
+  const m = settings.mcp;
+  const [st, setSt] = useState<McpStatus | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => {
+    // The server restarts after a save; give it a moment.
+    const id = window.setTimeout(() => api.mcpStatus().then(setSt, () => {}), 300);
+    return () => window.clearTimeout(id);
+  }, [m]);
+  const setM = (patch: Partial<AppSettings["mcp"]>) => save((s) => ({ ...s, mcp: { ...s.mcp, ...patch } }));
+  const copy = async (text: string, what: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setMsg(`${what} copied.`);
+    } catch (e) {
+      setMsg(String(e));
+    }
+  };
+  const claudeConfig = st
+    ? JSON.stringify(
+        { mcpServers: { "rift-coach": { command: st.exe_path, args: ["--mcp-stdio"] } } },
+        null,
+        2,
+      )
+    : "";
+  return (
+    <section className="panel">
+      <h2>AI agents (MCP)</h2>
+      <p className="muted">
+        Lets Claude Desktop or your own AI agent read your Rift Coach data: matches, metrics, patterns, AI
+        reviews, goals, weekly summaries and benchmarks. Read-only: agents can't change anything, and other
+        players' identities are never included.
+      </p>
+      <h3>Claude Desktop (and other apps that launch a command)</h3>
+      <p className="muted small-text">
+        Works without the server below. In Claude Desktop open Settings → Developer → Edit Config, add this,
+        and restart Claude Desktop.
+      </p>
+      <pre className="facts">{claudeConfig}</pre>
+      <button className="secondary small" disabled={!st} onClick={() => copy(claudeConfig, "Config")}>
+        Copy config
+      </button>
+      <h3>HTTP server (agents that connect to a URL)</h3>
+      <Toggle
+        label="Run the MCP server"
+        hint={`Streamable HTTP on port ${m.port}, on this PC only unless you allow your network below.`}
+        checked={m.enabled}
+        onChange={(v) => setM({ enabled: v })}
+      />
+      <Toggle
+        label="Allow devices on my network"
+        hint="For an agent on another machine (e.g. a home server). Always requires the access token. Windows may ask to let Rift Coach through the firewall."
+        checked={m.lan}
+        onChange={(v) => setM({ lan: v })}
+      />
+      <Toggle
+        label="Require the token on this PC too"
+        checked={m.require_token_local}
+        onChange={(v) => setM({ require_token_local: v })}
+      />
+      <div className="field">
+        <label>Port</label>
+        <input
+          type="number"
+          min={1024}
+          max={65535}
+          value={m.port}
+          onChange={(e) => setM({ port: Number(e.target.value) })}
+        />
+      </div>
+      {st && m.enabled && (
+        <div className="mcp-status">
+          {st.running ? (
+            <>
+              <p>
+                <span className="tag ok">Running</span> <span className="mono">{st.local_url}</span>
+                {st.lan_url && (
+                  <>
+                    {" "}
+                    · on your network: <span className="mono">{st.lan_url}</span>
+                  </>
+                )}
+              </p>
+              {st.token_required && (
+                <p className="muted small-text">
+                  Agents send the token as the header{" "}
+                  <span className="mono">Authorization: Bearer &lt;token&gt;</span>.
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="bad">Not running{st.error ? `: ${st.error}` : ""}</p>
+          )}
+        </div>
+      )}
+      <div className="form-row">
+        <button
+          className="secondary small"
+          onClick={() =>
+            api.mcpToken().then(
+              (t) => copy(t, "Access token"),
+              (e) => setMsg(String(e)),
+            )
+          }
+        >
+          Copy access token
+        </button>
+        <button
+          className="secondary small"
+          onClick={() =>
+            window.confirm(
+              "Make a new token? Agents using the current one stop working until you give them the new one.",
+            ) &&
+            api.mcpNewToken().then(
+              () => setMsg("New token made."),
+              (e) => setMsg(String(e)),
+            )
+          }
+        >
+          New token
+        </button>
+      </div>
+      {msg && <p className="muted">{msg}</p>}
+    </section>
+  );
+}
+
+function DataTools() {
+  const [msg, setMsg] = useState<string | null>(null);
+  const [forget, setForget] = useState(false);
+  const run = async (f: () => Promise<string | null>, done: (r: string) => string) => {
+    setMsg(null);
+    try {
+      const r = await f();
+      if (r) setMsg(done(r));
+    } catch (e) {
+      setMsg(String(e));
+    }
+  };
+  const restore = async () => {
+    const info = await api.restoreDatabase();
+    return info ? `Restoring ${info.matches} matches… restarting.` : null;
+  };
+  return (
+    <section className="panel">
+      <h2>Your data</h2>
+      <p className="muted">
+        Everything Rift Coach knows lives in one database on this PC. Back it up, take your games to a
+        spreadsheet, or start over.
+      </p>
+      <div className="form-row">
+        <button className="secondary" onClick={() => run(api.backupDatabase, (p) => `Backup saved: ${p}`)}>
+          Back up…
+        </button>
+        <button
+          className="secondary"
+          onClick={() =>
+            window.confirm(
+              "Restore a backup? Your current data is replaced (a copy is kept in the data folder as rift-coach.before-restore.db) and Rift Coach restarts.",
+            ) && run(restore, (m) => m)
+          }
+        >
+          Restore…
+        </button>
+        <button className="secondary" onClick={() => run(api.exportGamesCsv, (p) => `Exported: ${p}`)}>
+          Export games (CSV)…
+        </button>
+        <button
+          className="secondary"
+          onClick={() => void api.openDataFolder().catch((e) => setMsg(String(e)))}
+        >
+          Open data folder
+        </button>
+      </div>
+      <h3>Delete all my data</h3>
+      <p className="muted small-text">
+        Removes every game, review, goal, benchmark, setting and log from this PC, then restarts as a fresh
+        install. This can't be undone: back up first if you might want it back.
+      </p>
+      <label className="toggle">
+        <input type="checkbox" checked={forget} onChange={(e) => setForget(e.target.checked)} />
+        <span className="switch" />
+        <span>Also remove saved keys (Riot, AI, MCP token) and turn off start with Windows</span>
+      </label>
+      <div className="form-row">
+        <button
+          className="secondary danger"
+          onClick={() =>
+            window.confirm("Delete ALL Rift Coach data on this PC? This can't be undone.") &&
+            void api.deleteAllData(forget).catch((e) => setMsg(String(e)))
+          }
+        >
+          Delete all my data
+        </button>
+      </div>
+      {msg && <p className="muted">{msg}</p>}
+    </section>
+  );
+}
+
 function Appearance({ settings, save }: { settings: AppSettings; save: Save }) {
   const champs = useContext(ChampionsContext);
   const a = settings.appearance;
@@ -662,7 +944,7 @@ function Appearance({ settings, save }: { settings: AppSettings; save: Save }) {
   );
 }
 
-function Toggle({
+export function Toggle({
   label,
   hint,
   checked,

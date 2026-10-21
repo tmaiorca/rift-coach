@@ -113,6 +113,7 @@ async fn collects_benchmark_games_apart_from_your_lobbies() {
     db.with(|c| {
         let mut s = rc_store::settings::app(c)?;
         s.benchmarks.champions = vec!["Ahri".into()];
+        s.benchmarks.tier = "DIAMOND".into();
         rc_store::settings::set(c, rc_store::settings::APP, &s)
     })
     .expect("settings");

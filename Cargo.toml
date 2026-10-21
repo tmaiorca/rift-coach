@@ -11,6 +11,7 @@ members = [
     "crates/live",
     "crates/coach",
     "crates/jobs",
+    "crates/mcp",
     "cli",
     "src-tauri",
 ]

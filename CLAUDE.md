@@ -52,7 +52,9 @@ If `cargo` isn't on PATH in an old shell: `$env:PATH = "$env:USERPROFILE\.cargo\
 | Metrics + percentiles for a game | `cargo run -p rc-cli -- analyze [MATCH_ID]` (`--facts` prints the AI input) |
 | Patterns, win links, sessions | `cargo run -p rc-cli -- patterns --games 100 [--role MIDDLE] [--sessions]` |
 | Benchmark progress and gaps | `cargo run -p rc-cli -- benchmarks [--collect MINUTES] [--role MIDDLE] [--champion Leblanc]` |
-| Mock live game (no League needed) | `cargo run -p rc-cli -- mock-live --speed 10 [--mode CLASSIC]`, then run the app with `$env:RIFT_COACH_LIVE_URL = "http://127.0.0.1:2998"` |
+| Mock live game (no League needed) | `cargo run -p rc-cli -- mock-live --speed 10 [--mode CLASSIC] [--champion Ahri]` (defaults: primary account, most played champion), then run the app with `$env:RIFT_COACH_LIVE_URL = "http://127.0.0.1:2998"` |
+| MCP over stdio (read-only, real DB) | `cargo build -p rift-coach` then pipe JSON-RPC lines into `target\debug\rift-coach.exe --mcp-stdio` |
+| Installer (release build) | `npm run tauri build` → `target\release\bundle\nsis\`; set `TAURI_SIGNING_PRIVATE_KEY` (contents of `%USERPROFILE%\.tauri\rift-coach-updater.key`) to also sign the updater artifacts |
 | Status / role summary | `cargo run -p rc-cli -- status` / `-- summary` |
 | Endpoint smoke test (live) | `cargo run -p rc-cli -- smoke "TapRooted#BTC"` |
 | Record + scrub fixtures | `cargo run -p rc-cli -- record-fixtures "TapRooted#BTC"` then `-- scrub-fixtures --keep "TapRooted#BTC"` |
@@ -79,7 +81,10 @@ points the live poller at another (loopback-only) Live Client URL.
 - `crates/jobs` (`rc-jobs`): persistent job queue engine + handlers (ingest, metrics, auto review,
   post-game linking, rank, weekly report), `build_engine`, the live poller (`live.rs`, `spawn_live`, pre-game
   brief), the benchmark collector (`bench.rs`, `spawn_benchmarks`)
-- `cli` (`rc-cli`): dev CLI. `src-tauri` (`rift-coach`): app shell + commands. `ui/`: React app
+- `crates/mcp` (`rc-mcp`): read-only MCP server: tools over `rc-coach` views, JSON-RPC protocol, HTTP transport
+  (loopback default, LAN + bearer token), stdio transport (`--mcp-stdio`, read-only DB)
+- `cli` (`rc-cli`): dev CLI. `src-tauri` (`rift-coach`): app shell + commands (`commands.rs`), tray/autostart/close-to-tray
+  (`desktop.rs`), MCP lifecycle (`mcp_host.rs`), backup/restore/export/delete (`data.rs`), updater (`updates.rs`). `ui/`: React app
   (`pages/` per screen, `components/` shared, `lib/` formatting + cached Data Dragon images)
 - `prompts/`: versioned AI prompts (`<name>.v<N>.md`); bump the version (new file + `PROMPT_VERSION`) when changing one
 
@@ -118,6 +123,15 @@ points the live poller at another (loopback-only) Live Client URL.
   safe) mirrored in `ui/src/types.ts`. UI navigation state is free-form JSON
   under the `ui_state` key. No secrets in settings.
 - Python one-off edits on Windows must use `encoding="utf-8", newline=""`.
+- Nothing is LeBlanc/mid-specific: focus roles/champions, champion pages and the benchmark tier (`AUTO` = two tiers
+  above the viewed account's solo rank, via `benchmarks::effective_tier`) all derive from the player's own games.
+  Always use `effective_tier`, never `settings.benchmarks.tier` directly.
+- MCP tools are read-only and must never return other players' Riot IDs or any key. Keep outputs compact (they go
+  into an agent's context): cap lists like signals/evidence.
+- Restore/delete are staged files applied by `rc_store::maintenance::apply_pending` before the DB opens; never
+  swap the database under an open connection. New migrations go in `MIGRATIONS` in `crates/store/src/lib.rs`.
+- The updater's private signing key lives outside the repo (`%USERPROFILE%\.tauri\rift-coach-updater.key`,
+  CI secret `TAURI_SIGNING_PRIVATE_KEY`). Never commit or print it.
 
 ## Phase status
 
@@ -132,6 +146,8 @@ points the live poller at another (loopback-only) Live Client URL.
   post-game linking/analysis/notifications, footprint measurement): done 2026-10-18, reviewed.
 - Phase 5 (benchmark collection by tier/patch with focus-champion sampling, benchmark percentiles
   and gaps, weekly pages + AI weekly report, loading-screen brief + AI game plan, ranks): done
-  2026-10-18, pending review.
-- Next: Phase 6: MCP server (read-only tools, LAN + token), installer (NSIS, signed-ready),
-  first-run wizard, auto-update, tray + start with Windows, data export/backup/delete.
+  2026-10-18, reviewed.
+- Phase 6 (MCP server stdio + HTTP/LAN with token, NSIS installer signed-ready, signed auto-update from
+  GitHub releases, first-run setup, tray + start with Windows + single instance, backup/restore/CSV export/delete,
+  plus user-requested generalization: Champions page, Auto benchmark tier, looser focus-champion rule): done
+  2026-10-20, pending review.

@@ -1,0 +1,40 @@
+# Builds the Windows installer on a version tag (v0.2.0, ...) and attaches it,
+# its update signature and latest.json (what the in-app updater reads) to a
+# draft GitHub release. Publish the draft to ship it.
+#
+# Needs the repository secret TAURI_SIGNING_PRIVATE_KEY (the update key's
+# private half) and, if it has one, TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: cargo test --workspace
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Rift Coach ${{ github.ref_name }}
+          releaseBody: See the README for what's new and how to install.
+          releaseDraft: true
+          includeUpdaterJson: true

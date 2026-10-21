@@ -289,3 +289,46 @@ JSON files in `logs\` (14 kept). Data Dragon files live in
 Manager (`RiftCoach:riot_api_key`, set from Settings), the process
 environment, then the user environment in the registry (`HKCU\Environment`).
 AI keys live only in Credential Manager. No command returns a key.
+The MCP access token (`RiftCoach:mcp_token`) is the one exception to "no
+command returns a key": `mcp_token` hands it to the UI only to put it on the
+clipboard, on an explicit click.
+
+## MCP server
+
+`rc-mcp` exposes read-only tools over MCP (JSON-RPC 2.0). `protocol.rs`
+handles `initialize`, `ping`, `tools/list` and `tools/call`; `tools.rs` maps
+each tool to the same `rc-coach` views the UI uses (`get_match` returns the
+post-game AI facts object, so agents see exactly what reviews see: no other
+players' Riot IDs). Two transports:
+
+- **stdio** (`rift-coach.exe --mcp-stdio`): Claude Desktop starts its own
+  process, which opens the database with `Db::open_read_only` (no migrations,
+  refuses a schema-version mismatch) and never starts Tauri, workers or the
+  poller. WAL lets it read while the app writes.
+- **Streamable HTTP** (`POST /mcp`, JSON responses, no SSE) inside the app,
+  restarted by `mcp_host::apply` whenever the `mcp` settings change. Loopback
+  by default; LAN mode binds `0.0.0.0` and requires the bearer token. Requests
+  with a non-loopback `Origin` are refused, and on loopback a non-loopback
+  `Host` too (DNS rebinding). Tokens compare in constant time.
+
+## Desktop shell, updates and data management
+
+- **Single instance**: a second launch focuses the running window.
+- **Tray / close to tray**: closing the main window hides it while
+  `desktop.close_to_tray` is on (mirrored into an `AtomicBool` for the
+  synchronous window event); Quit is on the tray menu.
+- **Start with Windows**: `tauri-plugin-autostart` writes the HKCU Run entry
+  with `--minimized`, which starts with the main window hidden. Windows is the
+  source of truth, so it isn't a setting.
+- **Updates**: `tauri-plugin-updater` reads `latest.json` from the newest
+  GitHub release and verifies the minisign signature against the public key in
+  `tauri.conf.json` before running the NSIS installer (passive mode). The
+  private key is never in the repository (a CI secret for releases).
+- **Backup / restore / delete** (`rc_store::maintenance`): backup is
+  `VACUUM INTO` (consistent while the app runs). Restore and delete are staged
+  as files (`restore-pending.db`, `delete-pending`) and applied by
+  `apply_pending` at the next start, before the database or log file is
+  opened; the app restarts itself to get there, retrying for a few seconds
+  while the old process exits.
+- **First run**: the setup overlay shows until `desktop.onboarded`; installs
+  that already have an account are marked onboarded on start.

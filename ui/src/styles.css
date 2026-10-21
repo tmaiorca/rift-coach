@@ -2042,3 +2042,76 @@ table.gaps .tag {
 .live-card.brief li.watch {
   color: #ffd99a;
 }
+
+/* ---------- champions ---------- */
+.champ-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.champ-row .session-when {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pre-wrap {
+  white-space: pre-wrap;
+}
+
+/* ---------- first-run setup ---------- */
+.setup {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(6, 8, 14, 0.82);
+  backdrop-filter: blur(6px);
+}
+.setup-card {
+  width: min(680px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+.setup-card h1 {
+  font-size: 24px;
+  margin: 8px 0 12px;
+}
+.setup-card li {
+  margin: 4px 0;
+}
+.setup-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.setup-step {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.setup-step.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.setup-step.done {
+  color: var(--text);
+}
+.setup-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.banner.update {
+  background: rgba(36, 52, 88, 0.88);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

@@ -1,0 +1,28 @@
+[package]
+name = "rc-mcp"
+description = "Read-only MCP server: your matches, metrics, patterns, reviews and goals for AI agents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+rc-coach = { version = "0.1.0", path = "../coach" }
+rc-common = { version = "0.1.0", path = "../common" }
+rc-signals = { version = "0.1.0", path = "../signals" }
+rc-store = { version = "0.1.0", path = "../store" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.53.3", features = ["rt", "net", "io-util", "io-std", "sync", "macros"] }
+tracing = "0.1.44"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+tempfile = "3.27.0"
+tokio = { version = "1.53.3", features = ["full"] }

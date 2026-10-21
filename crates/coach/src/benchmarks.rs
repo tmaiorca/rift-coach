@@ -23,14 +23,69 @@ pub const MIN_CHAMPION_SAMPLE: usize = 15;
 /// Recent games used to pick focus roles and champions.
 const FOCUS_GAMES: u32 = 50;
 const MAX_FOCUS_CHAMPIONS: usize = 3;
+/// A focus champion has at least this many of those games...
+const FOCUS_MIN_GAMES: usize = 3;
+/// ...and at least this share of them.
+const FOCUS_MIN_SHARE_PCT: usize = 10;
+
+/// Ranked tiers in order (Master covers Grandmaster and Challenger too).
+const LADDER: [&str; 8] = ["IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER"];
+/// "Auto" compares with players this many tiers above your solo rank.
+const AUTO_STEPS: usize = 2;
+/// "Auto" never goes below this tier (lower tiers teach little).
+const AUTO_MIN: &str = "GOLD";
+/// "Auto" when the account has no solo rank yet.
+const AUTO_UNRANKED: &str = "PLATINUM";
 
 pub fn tier_label(tier: &str) -> &'static str {
     match tier {
+        "GOLD" => "Gold",
+        "PLATINUM" => "Platinum",
         "EMERALD" => "Emerald",
         "DIAMOND" => "Diamond",
         "MASTER" => "Master+",
         _ => "higher-rank",
     }
+}
+
+/// The tier benchmarks are collected and compared in: the setting, or for
+/// `AUTO` two tiers above the solo rank of the account the app is showing
+/// (Gold at least; Platinum while unranked).
+pub fn effective_tier(conn: &Connection, settings: &AppSettings) -> rc_store::Result<String> {
+    if settings.benchmarks.tier != AUTO {
+        return Ok(settings.benchmarks.tier.clone());
+    }
+    let account = match settings.active_account_id {
+        Some(a) => rc_store::accounts::get_account(conn, a)?,
+        None => None,
+    };
+    let account = match account {
+        Some(a) => Some(a),
+        None => rc_store::accounts::primary_account(conn)?,
+    };
+    let solo = match account {
+        Some(a) => {
+            bench::ranks(conn, a.id)?.into_iter().find(|r| r.queue_type == "RANKED_SOLO_5x5").and_then(|r| r.tier)
+        }
+        None => None,
+    };
+    Ok(auto_tier(solo.as_deref()).to_owned())
+}
+
+pub const AUTO: &str = "AUTO";
+
+/// Two tiers above `solo`, between Gold and Master+.
+pub fn auto_tier(solo: Option<&str>) -> &'static str {
+    let Some(i) = solo.and_then(|t| LADDER.iter().position(|l| l.eq_ignore_ascii_case(t))) else {
+        // Grandmaster and Challenger aren't in the ladder list.
+        return if solo.is_some_and(|t| t.eq_ignore_ascii_case("GRANDMASTER") || t.eq_ignore_ascii_case("CHALLENGER")) {
+            "MASTER"
+        } else {
+            AUTO_UNRANKED
+        };
+    };
+    let min = LADDER.iter().position(|l| *l == AUTO_MIN).unwrap_or(0);
+    LADDER[(i + AUTO_STEPS).clamp(min, LADDER.len() - 1)]
 }
 
 /// Roles and champions to sample first.
@@ -65,7 +120,10 @@ pub fn focus(conn: &Connection, account_id: Option<i64>, settings: &AppSettings)
         .take(2)
         .collect();
     let champions = if settings.benchmarks.champions.is_empty() {
-        let mut c: Vec<(String, usize)> = champs.into_iter().filter(|(_, n)| *n >= 5).collect();
+        let mut c: Vec<(String, usize)> = champs
+            .into_iter()
+            .filter(|(_, n)| *n >= FOCUS_MIN_GAMES && *n * 100 / total >= FOCUS_MIN_SHARE_PCT)
+            .collect();
         c.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         c.into_iter().take(MAX_FOCUS_CHAMPIONS).map(|(n, _)| n).collect()
     } else {
@@ -166,8 +224,11 @@ pub struct SampleProgress {
 #[derive(Debug, Clone, Serialize)]
 pub struct Progress {
     pub enabled: bool,
+    /// The tier in use (`AUTO` resolved).
     pub tier: String,
     pub tier_label: &'static str,
+    /// The tier was picked from your rank.
+    pub auto: bool,
     pub patch: Option<String>,
     pub focus: Focus,
     pub targets: Vec<SampleProgress>,
@@ -192,7 +253,7 @@ impl Progress {
 }
 
 pub fn progress(conn: &Connection, account_id: Option<i64>, settings: &AppSettings) -> rc_store::Result<Progress> {
-    let tier = settings.benchmarks.tier.clone();
+    let tier = effective_tier(conn, settings)?;
     let focus = focus(conn, account_id, settings)?;
     let patch = current_patch(conn)?;
     let key_gen = rc_store::accounts::latest_key_gen(conn)?;
@@ -222,6 +283,7 @@ pub fn progress(conn: &Connection, account_id: Option<i64>, settings: &AppSettin
     Ok(Progress {
         enabled: settings.benchmarks.enabled,
         tier_label: tier_label(&tier),
+        auto: settings.benchmarks.tier == AUTO,
         games_by_patch: bench::patches(conn, &tier)?,
         collector: match key_gen {
             Some(k) => bench::collector_counts(conn, k, &tier)?,
@@ -281,9 +343,9 @@ pub fn gaps(
         account_id,
         &GameFilter { role: Some(role.to_owned()), champion_name: champion.map(str::to_owned), ..filter },
     )?;
-    let tier = &settings.benchmarks.tier;
+    let tier = effective_tier(conn, settings)?;
     let patch = current_patch(conn)?;
-    let (role_pop, champ_pop) = populations(conn, tier, patch.as_deref(), role, champion)?;
+    let (role_pop, champ_pop) = populations(conn, &tier, patch.as_deref(), role, champion)?;
     let reference = champ_pop.as_ref().or(role_pop.as_ref());
     let mut out = Vec::new();
     if let Some(r) = reference {
@@ -329,5 +391,11 @@ mod tests {
         assert!(is_early("cs_10") && is_early("gold_diff_15") && is_early("deaths_pre14"));
         assert!(!is_early("kp") && !is_early("dpm"));
         assert_eq!(tier_label("MASTER"), "Master+");
+        assert_eq!(auto_tier(Some("BRONZE")), "GOLD");
+        assert_eq!(auto_tier(Some("IRON")), "GOLD");
+        assert_eq!(auto_tier(Some("GOLD")), "EMERALD");
+        assert_eq!(auto_tier(Some("EMERALD")), "MASTER");
+        assert_eq!(auto_tier(Some("CHALLENGER")), "MASTER");
+        assert_eq!(auto_tier(None), "PLATINUM");
     }
 }

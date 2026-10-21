@@ -7,20 +7,25 @@ across your games and which of your numbers actually go with winning, tracks
 focus goals game by game, and (with your own AI key) writes grounded reviews
 of single games, play sessions and whole weeks. It also collects games of
 higher-ranked players in the background, so you can see where your numbers
-would rank among them. While you play it stays out of the
+would rank among them. Everything follows the champions and roles *you*
+play, whoever you are: champion pages, patterns and benchmarks pick them up
+from your games. While you play it stays out of the
 way: it shows only your own numbers on a second screen, pauses its background
 work, and analyzes the game as soon as Riot publishes it. Everything stays on
-your PC.
+your PC, and AI agents such as Claude Desktop can read it (read-only) through
+its MCP server.
 
 > This guide is also the **Guide** page inside the app. It's one file
 > (`README.md`), so the app and GitHub always show the same text.
 
-**Status:** Phase 5 of 6 (higher-rank benchmarks, weekly reports, loading-screen
-brief, rank). See [Roadmap](#roadmap).
+**Status:** all 6 phases built: Windows installer with signed auto-updates,
+first-run setup, tray and start with Windows, champion pages, data backup,
+export and delete, and an MCP server for AI agents. See [Roadmap](#roadmap).
 
 ## Contents
 
 - [Getting started](#getting-started)
+- [Installing and updating](#installing-and-updating)
 - [Pages](#pages)
 - [How the numbers work](#how-the-numbers-work)
 - [Patterns and what wins your games](#patterns-and-what-wins-your-games)
@@ -30,6 +35,7 @@ brief, rank). See [Roadmap](#roadmap).
 - [Live games](#live-games)
 - [The loading-screen brief](#the-loading-screen-brief)
 - [The AI coach](#the-ai-coach)
+- [AI agents (MCP)](#ai-agents-mcp)
 - [Settings](#settings)
 - [Your data, keys and privacy](#your-data-keys-and-privacy)
 - [Riot's rules and what the app won't do](#riots-rules-and-what-the-app-wont-do)
@@ -39,18 +45,54 @@ brief, rank). See [Roadmap](#roadmap).
 
 ## Getting started
 
-1. **Riot API key.** Get one at [developer.riotgames.com](https://developer.riotgames.com).
-   Either paste it in **Settings → Riot API key** (stored in Windows Credential
-   Manager) or set the `RIOT_API_KEY` user environment variable.
-2. **Add yourself.** Open **Players**, enter your Riot ID (e.g. `TapRooted#BTC`),
-   pick your region, choose how many games to look back, and click **Look up**.
+1. **Install.** Download `Rift Coach_<version>_x64-setup.exe` from the
+   [latest release](https://github.com/tmaiorca/rift-coach/releases/latest) and run it (see
+   [Installing and updating](#installing-and-updating)).
+2. **First-run setup.** The app opens a short setup:
+   - **Riot API key.** Sign in at [developer.riotgames.com](https://developer.riotgames.com)
+     with your Riot account. The *Development API key* on the dashboard works
+     right away but expires every 24 hours; for a key that lasts, register a
+     *Personal* app there. The key goes to Windows Credential Manager. (You can
+     also set it as the `RIOT_API_KEY` user environment variable.)
+   - **Your account.** Your Riot ID as shown in the client (`Name#TAG`) and
+     your server. Your newest games start downloading.
+   - **AI coach (optional).** Pick a provider (Anthropic, OpenAI, Gemini, or
+     any OpenAI-compatible endpoint, including a model on your own server)
+     and paste its key. Everything except the written reviews works without it.
+   - **Desktop.** Start with Windows (quietly, in the tray), keep running when
+     the window is closed, and which rank to compare yourself with.
+
+   Every step can be skipped and changed later in **Settings**.
 3. **Wait a few minutes.** With a personal key Riot allows about 100 requests
    every 2 minutes, so 100 games plus their timelines take about 4–5 minutes.
    The dashboard shows progress. Closing the app is safe: work resumes when
    you reopen it, and games already stored are never downloaded twice.
-4. **Optional: AI reviews.** In **Settings → AI coach**, pick a provider, save
-   your API key, choose a model, and click **Test connection**. Then open any
-   match and click **Review this game**.
+4. **Play.** The **Live** page shows your own numbers during a game, and the
+   game is analyzed a few minutes after it ends. Open any match and click
+   **Review this game** for an AI review.
+
+More accounts (smurfs, a friend on the same PC) go on the **Players** page;
+each has its own games, champions, goals and reports.
+
+## Installing and updating
+
+- **Installer.** A standard Windows installer (NSIS) that installs for your
+  Windows user only, so it needs no administrator rights. It installs
+  Microsoft's WebView2 runtime if your PC doesn't have it (Windows 11 does).
+  Uninstall from **Settings → Apps** in Windows; your data folder stays unless
+  you use **Delete all my data** first.
+- **"Windows protected your PC".** Releases aren't code-signed yet, so
+  SmartScreen may warn about an unknown publisher. Click **More info → Run
+  anyway**. (The installer is built to be signed later without other changes.)
+- **Updates.** On start, Rift Coach checks GitHub for a newer release and shows
+  a banner; nothing is installed until you click **Install and restart**.
+  Updates are signed with the project's update key and the app refuses any
+  package without a valid signature. Turn the check off, or check by hand, in
+  **Settings → Desktop**.
+- **Tray.** Closing the window keeps Rift Coach in the tray (so it can still
+  catch your next game); click the tray icon to reopen it, right-click it to
+  quit. Starting it again (Start menu) brings back the running copy instead of
+  opening a second one.
 
 ## Pages
 
@@ -77,6 +119,14 @@ game's post-game status (with a button to open it once it's analyzed), the
 result. ARAM, Arena and other modes are shown dimmed (you can hide them) and
 never count toward metrics. ✦ marks games with an AI review. Click a row to
 open it.
+
+**Champions.** Every champion you've played in your last 300 Summoner's Rift
+games, most played first (champions tagged *focus* are the ones benchmarks
+sample first). For one champion: your record and roles; your averages on it
+against your other champions in the same role (better or worse in green and
+red); your lane matchups (record, gold difference at 15:00 and CS difference at
+10:00 against each lane opponent); your recent games on it; the recurring
+patterns in your games on it; and how you compare with higher ranks on it.
 
 **Match detail.**
 - *AI coach*: the review for this game (see [The AI coach](#the-ai-coach)).
@@ -219,15 +269,20 @@ games*). It counts your Summoner's Rift games played after you create it.
 "Better than most players in your games" only tells you where you stand in
 your own bracket. Benchmarks show what the next level looks like.
 
-- **What's collected.** Recent solo queue games of players in the benchmark
-  tier (Emerald, Diamond or Master+; Settings → Benchmarks). Rift Coach reads
+- **Which rank.** By default (*Auto*) two tiers above your solo rank, at
+  least Gold: a Bronze player compares with Gold, a Gold player with Emerald,
+  an Emerald player with Master+. Unranked accounts compare with Platinum. Pick
+  a fixed tier (Gold, Platinum, Emerald, Diamond, Master+) in Settings →
+  Benchmarks. The rank comes from the account you're viewing.
+- **What's collected.** Recent solo queue games of players in that tier. Rift Coach reads
   the ladder (League-V4), lists those players' games from the last two weeks,
   downloads each match and timeline, and runs the same metrics on all ten
   players. Benchmarks are kept per patch (the newest two patches are kept).
 - **Your champions first.** It checks players' top champion masteries and
-  samples those who main your focus champions first (by default your most
-  played champions with 5+ games in your last 50, LeBlanc for you). Every game
-  also adds samples for every role in it.
+  samples those who main your focus champions first: by default your up to
+  three most played champions that have 3+ games and at least 10% of your last
+  50, or the ones you pick in Settings. Every game also adds samples for every
+  role in it, so the role comparison covers any champion you play.
 - **Targets.** 300 players in each of your main roles and 50 on each focus
   champion, per patch. When they're met, collection stops until the next patch
   or the weekly ladder refresh.
@@ -379,6 +434,49 @@ If the app opens mid-game you still get the brief, but no AI plan.
   last day; checked every 10 minutes). Older games pulled in by a sync are
   never auto-reviewed.
 
+## AI agents (MCP)
+
+Rift Coach includes an [MCP](https://modelcontextprotocol.io) server, so Claude
+Desktop or your own AI agent can answer questions like "what's my biggest
+problem on Ahri lately?" from your real data. It's **read-only**: agents can't
+change anything, start downloads, or call Riot or your AI provider. It never
+includes other players' identities or any key.
+
+**Tools:** `list_accounts`, `list_matches`, `get_match` (a game's metrics with
+percentiles, patterns, timeline moments and goals: the same facts the AI
+reviews use), `get_patterns`, `get_goals`, `list_reports` and `get_report`
+(your AI reviews), `get_week`, `get_benchmarks`, `get_champions`,
+`list_sessions`. Each takes an optional `riot_id` for another tracked account.
+
+**Claude Desktop** (or any client that starts a command): in Settings → AI
+agents, click **Copy config**, then in Claude Desktop open **Settings →
+Developer → Edit Config**, paste it into `claude_desktop_config.json`, and
+restart Claude Desktop. It looks like this:
+
+```json
+{
+  "mcpServers": {
+    "rift-coach": {
+      "command": "C:\\Users\\you\\AppData\\Local\\Rift Coach\\rift-coach.exe",
+      "args": ["--mcp-stdio"]
+    }
+  }
+}
+```
+
+Claude Desktop then starts its own copy of Rift Coach in a window-less mode
+that reads the database without changing it (the app doesn't need to be
+open).
+
+**Agents that connect to a URL** (an agent on a home server, for example):
+turn on **Run the MCP server**. It listens at `http://127.0.0.1:7337/mcp`
+(Streamable HTTP) on this PC only. **Allow devices on my network** makes it
+reachable at your PC's network address (shown in Settings); that always
+requires the access token, sent as `Authorization: Bearer <token>`. **Copy
+access token** puts it on the clipboard (it's stored in Windows Credential
+Manager and never shown); **New token** replaces it. Requests from web pages
+are refused, so a website you visit can't read your data through it.
+
 ## Settings
 
 | Setting | What it does |
@@ -389,7 +487,7 @@ If the app opens mid-game you still get the brief, but no AI plan.
 | Automatically write a weekly report | After each week with 3+ Summoner's Rift games (default off) |
 | Write an AI game plan at the loading screen | One short static plan per game (default off) |
 | Collect higher-rank games | Background benchmark collection (default on) |
-| Compare with | Benchmark tier: Emerald, Diamond (default) or Master and above |
+| Compare with | Benchmark tier: Auto (default: two tiers above your solo rank), Gold, Platinum, Emerald, Diamond or Master and above |
 | Champions to sample first | Up to 3; empty = your most played |
 | Pace | Seconds between collection steps (default 5; each step makes 1–2 Riot calls) |
 | Keep up to N games | Benchmark games kept on disk (default 2,000, about 120 MB) |
@@ -404,6 +502,11 @@ If the app opens mid-game you still get the brief, but no AI plan.
 | Session gap | Games less than this many minutes apart are one session (default 60) |
 | Matches per sync / lookup | How many recent games a sync fetches (default 100, up to 1000) |
 | Show other modes | Show or hide ARAM/Arena/etc. in the match list |
+| Start with Windows | Starts Rift Coach in the tray when you sign in to Windows |
+| Keep running in the tray | Closing the window hides it to the tray (default on); quit from the tray icon |
+| Check for updates on start | Look for a new release and offer it (default on); **Check for updates now** |
+| AI agents (MCP) | Claude Desktop config to copy, the HTTP server on/off, port (default 7337), network access, token on this PC too, copy or replace the access token. See [AI agents (MCP)](#ai-agents-mcp) |
+| Your data | Back up, restore, export games as CSV, open the data folder, delete all my data (see below) |
 | Animated background | Splash art of the open match's champion (else your most played), a slow hextech ring and floating particles that react to your mouse. Choose intensity or a fixed champion, or turn it off. It pauses when Windows "reduce motion" is on |
 
 ## Your data, keys and privacy
@@ -418,6 +521,20 @@ If the app opens mid-game you still get the brief, but no AI plan.
   The app never displays a saved key.
 - Matches are stored by match ID and Riot ID rather than PUUID, because
   PUUIDs are encrypted per API key. Switching keys keeps your history.
+- **Back up** (Settings → Your data) saves a consistent copy of the database
+  wherever you choose, even while the app is working. **Restore** checks the
+  file is a Rift Coach backup, keeps your current database as
+  `rift-coach.before-restore.db`, and restarts into the backup. Backups don't
+  contain keys.
+- **Export games (CSV)** writes one row per Summoner's Rift game of the account
+  you're viewing, with every metric as a column, for spreadsheets.
+- **Delete all my data** removes the database, image cache and logs, then
+  restarts as a fresh install. Tick the box to also remove the saved Riot, AI
+  and MCP keys and turn off start with Windows. Uninstalling the app doesn't
+  delete your data on its own.
+- The MCP server's access token is kept in Credential Manager like the other
+  keys. The HTTP server is off by default and on this PC only unless you allow
+  your network.
 
 ## Riot's rules and what the app won't do
 
@@ -455,6 +572,11 @@ gameplay", reveal hidden information, or automate input. So Rift Coach:
 | Benchmarks say "Waiting" | They pause during games, while your own games download, and when the Riot key has a problem |
 | No brief on the loading screen | The brief needs Riot's Spectator API to see your game, which can lag a few seconds; it shows "None of your tracked Riot IDs is in a game" when it can't |
 | CS in the live view jumps in steps | That's how the game client reports it; the number catches up |
+| "Windows protected your PC" when installing | Releases aren't code-signed yet: **More info → Run anyway** |
+| Claude Desktop doesn't show Rift Coach's tools | Check the path in the config matches where Rift Coach is installed (**Copy config** has it), then fully quit and reopen Claude Desktop. Open Rift Coach once after an update first |
+| The MCP server says it couldn't listen on its port | Another program uses the port; pick another one in Settings → AI agents |
+| An agent on another PC can't connect | Turn on **Allow devices on my network**, allow Rift Coach through Windows Firewall (private networks), and send the access token |
+| Closing the window doesn't quit | It's in the tray; right-click the tray icon → **Quit**, or turn off "Keep running in the tray" |
 
 ## For developers
 
@@ -479,6 +601,17 @@ app pointed at it in another:
 The mock defaults to a practice tool game (no Match-V5 lookup afterwards);
 `--mode CLASSIC` exercises the post-game lookup too.
 
+**Building the installer.** `npm run tauri build` produces
+`target/release/bundle/nsis/Rift Coach_<version>_x64-setup.exe`. With the
+update signing key in `TAURI_SIGNING_PRIVATE_KEY` (and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`), it also writes the `.sig` signature that
+auto-update needs. The GitHub workflow `.github/workflows/release.yml` does
+this on a `v*` tag and publishes the installer and `latest.json` (what the
+updater reads) as a draft release; add the key as the repository secret
+`TAURI_SIGNING_PRIVATE_KEY`. Code signing slots in through
+`bundle.windows.certificateThumbprint` (or `signCommand`) in
+`src-tauri/tauri.conf.json`.
+
 Architecture: `docs/architecture.md`. Conventions and commands: `CLAUDE.md`.
 AI prompts are versioned files in `prompts/`. Test fixtures in
 `tests/fixtures/riot` are real responses with every other player's identity
@@ -491,4 +624,4 @@ replaced.
 3. ✅ Patterns across games, win correlation, death heat map, focus goals, session reviews, AI token cap.
 4. ✅ Live companion (your own numbers only), game-aware scheduling, analysis and review at game end, footprint measurement.
 5. ✅ Higher-rank benchmarks by patch, benchmark percentiles, weekly reports, loading-screen brief and AI game plan, rank.
-6. MCP server for AI agents, installer, first-run wizard, auto-update.
+6. ✅ MCP server for AI agents (stdio and HTTP, LAN with a token), Windows installer, signed auto-update, first-run setup, tray and start with Windows, data backup/restore/export/delete, champion pages, rank-relative benchmarks.

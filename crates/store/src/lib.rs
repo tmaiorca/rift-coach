@@ -10,6 +10,7 @@ pub mod ddragon;
 pub mod goals;
 pub mod jobs;
 pub mod live;
+pub mod maintenance;
 pub mod matches;
 pub mod metrics;
 pub mod raw;
@@ -40,14 +41,21 @@ pub enum StoreError {
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+/// Schema migrations in order; a database's `user_version` is how many ran.
+const MIGRATIONS: [&str; 5] = [
+    include_str!("../migrations/001_init.sql"),
+    include_str!("../migrations/002_metrics_ai_activity.sql"),
+    include_str!("../migrations/003_signals_goals_sessions.sql"),
+    include_str!("../migrations/004_live.sql"),
+    include_str!("../migrations/005_benchmarks_ranks_briefs.sql"),
+];
+
 fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![
-        M::up(include_str!("../migrations/001_init.sql")),
-        M::up(include_str!("../migrations/002_metrics_ai_activity.sql")),
-        M::up(include_str!("../migrations/003_signals_goals_sessions.sql")),
-        M::up(include_str!("../migrations/004_live.sql")),
-        M::up(include_str!("../migrations/005_benchmarks_ranks_briefs.sql")),
-    ])
+    Migrations::new(MIGRATIONS.iter().map(|sql| M::up(sql)).collect())
+}
+
+fn migrations_len() -> usize {
+    MIGRATIONS.len()
 }
 
 #[derive(Clone, Debug)]
@@ -61,6 +69,22 @@ impl Db {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         Self::init(&mut conn)?;
+        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+    }
+
+    /// Opens an existing database for reading only (the MCP server's stdio
+    /// mode, a separate process from the app). Never migrates.
+    pub fn open_read_only(path: &Path) -> Result<Self> {
+        use rusqlite::OpenFlags;
+        let conn =
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version != migrations_len() as i64 {
+            return Err(StoreError::Io(std::io::Error::other(
+                "the database is from another Rift Coach version; open the app once first",
+            )));
+        }
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 

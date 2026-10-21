@@ -292,6 +292,23 @@ async fn ingests_recorded_fixtures() {
     assert!(mine.contains_key("cs_10") && mine.contains_key("kp"));
     assert!(!mine.contains_key("first_back_gold"), "needs item prices");
 
+    // Champion pages work for whatever the player plays.
+    let (champs, detail, csv) = db
+        .with(|c| {
+            let s = rc_store::settings::app(c)?;
+            let champs = rc_coach::champions::list(c, me, &s)?;
+            let top = champs.first().expect("a champion").champion.clone();
+            let detail = rc_coach::champions::detail(c, me, &top, &s)
+                .map_err(|e| rc_store::StoreError::Io(std::io::Error::other(e.to_string())))?;
+            Ok((champs, detail, rc_coach::export::games_csv(c, me)?))
+        })
+        .expect("champions");
+    assert_eq!(detail.summary.games, champs[0].games);
+    assert!(detail.summary.games > 0 && detail.role.is_some());
+    assert!(detail.matchups.iter().map(|m| m.games).sum::<usize>() <= detail.summary.games);
+    assert!(!detail.recent.is_empty());
+    assert_eq!(csv.lines().count(), 1 + champs.iter().map(|c| c.games).sum::<usize>(), "header + one row per game");
+
     // On-demand AI review against a mock provider: the first reply is
     // unusable, so the coach asks again with feedback.
     let ai = MockServer::start().await;

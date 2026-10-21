@@ -110,11 +110,12 @@ enum Command {
         /// Game length in minutes.
         #[arg(long, default_value_t = 28.0)]
         minutes: f64,
-        /// Data Dragon champion id.
-        #[arg(long, default_value = "Leblanc")]
-        champion: String,
-        #[arg(long, default_value = "TapRooted#BTC")]
-        riot_id: String,
+        /// Data Dragon champion id (default: your most played).
+        #[arg(long)]
+        champion: Option<String>,
+        /// Default: your primary account.
+        #[arg(long)]
+        riot_id: Option<String>,
         /// CLASSIC games are looked up in Match-V5 afterwards; PRACTICETOOL ones aren't.
         #[arg(long, default_value = "PRACTICETOOL")]
         mode: String,
@@ -148,6 +149,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Summary => summary(&paths),
         Command::MockLive { port, speed, minutes, champion, riot_id, mode, lose, loading, hold } => {
+            let (default_id, default_champ) = mock_defaults(&paths)?;
+            let riot_id = riot_id.or(default_id).ok_or_else(|| anyhow::anyhow!("no account yet: pass --riot-id"))?;
+            let champion = champion.or(default_champ).unwrap_or_else(|| "Ahri".into());
             mock_live::run(mock_live::Options {
                 port,
                 speed,
@@ -556,4 +560,20 @@ async fn smoke(engine: &Arc<Engine>, riot_id: &RiotId, platform: Platform) -> an
             .map(|g| if g.is_some() { "in a game".into() } else { "not in a game (404, expected)".into() }),
     );
     Ok(())
+}
+
+/// The primary account's Riot ID and most played champion, for `mock-live`.
+fn mock_defaults(paths: &AppPaths) -> anyhow::Result<(Option<String>, Option<String>)> {
+    if !paths.db_file.exists() {
+        return Ok((None, None));
+    }
+    let db = rc_store::Db::open(&paths.db_file)?;
+    Ok(db.with(|c| {
+        let Some(a) = rc_store::accounts::primary_account(c)? else { return Ok((None, None)) };
+        let champ = rc_store::matches::role_champion_stats(c, a.id)?
+            .into_iter()
+            .max_by_key(|s| s.games)
+            .map(|s| s.champion_name);
+        Ok((Some(format!("{}#{}", a.game_name, a.tag_line)), champ))
+    })?)
 }

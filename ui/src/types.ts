@@ -348,6 +348,17 @@ export interface AppSettings {
     background_champion: string | null;
     particles: boolean;
   };
+  desktop: {
+    close_to_tray: boolean;
+    check_updates: boolean;
+    onboarded: boolean;
+  };
+  mcp: {
+    enabled: boolean;
+    port: number;
+    lan: boolean;
+    require_token_local: boolean;
+  };
   benchmarks: {
     enabled: boolean;
     tier: BenchmarkTier;
@@ -771,7 +782,7 @@ export interface BriefState {
 
 // ---------- benchmarks, ranks, weeks (Phase 5) ----------
 
-export type BenchmarkTier = "EMERALD" | "DIAMOND" | "MASTER";
+export type BenchmarkTier = "AUTO" | "GOLD" | "PLATINUM" | "EMERALD" | "DIAMOND" | "MASTER";
 
 export interface SampleProgress {
   role: string;
@@ -784,8 +795,11 @@ export interface SampleProgress {
 export interface BenchmarkStatus {
   progress: {
     enabled: boolean;
-    tier: BenchmarkTier;
+    /** The tier in use ("AUTO" resolved). */
+    tier: Exclude<BenchmarkTier, "AUTO">;
     tier_label: string;
+    /** Picked from your solo rank. */
+    auto: boolean;
     patch: string | null;
     focus: { roles: string[]; champions: string[] };
     targets: SampleProgress[];
@@ -900,4 +914,82 @@ export interface BuildPlanView {
   source: "plan" | "usual" | null;
   items: PlannedItem[];
   patch: string;
+}
+
+// ---------- champions ----------
+
+export interface ChampionSummary {
+  champion: string;
+  champion_id: number;
+  games: number;
+  wins: number;
+  roles: [string, number][];
+  last_played_ms: number;
+  averages: Record<string, number>;
+  focus: boolean;
+}
+
+export interface Matchup {
+  champion: string;
+  champion_id: number;
+  games: number;
+  wins: number;
+  gold_diff_15: number | null;
+  cs_diff_10: number | null;
+  deaths_pre14: number | null;
+}
+
+export interface ChampionVsRole {
+  metric: string;
+  label: string;
+  on_champion: number;
+  role_average: number | null;
+  better: boolean | null;
+}
+
+export interface ChampionRecentGame {
+  match_id: string;
+  start_ms: number;
+  win: boolean;
+  role: string | null;
+  opponent: string | null;
+  opponent_id: number | null;
+  kills: number | null;
+  deaths: number | null;
+  assists: number | null;
+}
+
+export interface ChampionDetail {
+  summary: ChampionSummary;
+  role: string | null;
+  role_games: number;
+  vs_role: ChampionVsRole[];
+  matchups: Matchup[];
+  signals: Signal[];
+  benchmark: GapsView | null;
+  recent: ChampionRecentGame[];
+}
+
+// ---------- desktop, MCP, data, updates ----------
+
+export interface McpStatus {
+  running: boolean;
+  error: string | null;
+  local_url: string | null;
+  lan_url: string | null;
+  token_required: boolean;
+  exe_path: string;
+}
+
+export interface BackupInfo {
+  schema_version: number;
+  accounts: number;
+  matches: number;
+  reports: number;
+}
+
+export interface UpdateInfo {
+  version: string;
+  current_version: string;
+  notes: string | null;
 }

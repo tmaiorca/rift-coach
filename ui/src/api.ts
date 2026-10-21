@@ -18,7 +18,12 @@ import type {
   Rank,
   WeekDetail,
   WeekSummary,
+  BackupInfo,
   BuildPlanView,
+  McpStatus,
+  UpdateInfo,
+  ChampionDetail,
+  ChampionSummary,
   PlannerItem,
   MatchDetail,
   MatchRow,
@@ -109,6 +114,22 @@ export const api = {
   generateWeeklyReport: (week: string, force: boolean) =>
     invoke<Report>("generate_weekly_report", { week, force }),
   weeklyFacts: (week: string) => invoke<unknown>("weekly_facts", { week }),
+
+  championList: () => invoke<ChampionSummary[]>("champion_list"),
+  championDetail: (champion: string) => invoke<ChampionDetail>("champion_detail", { champion }),
+
+  autostartEnabled: () => invoke<boolean>("autostart_enabled"),
+  setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
+  mcpStatus: () => invoke<McpStatus>("mcp_status"),
+  mcpToken: () => invoke<string>("mcp_token"),
+  mcpNewToken: () => invoke<void>("mcp_new_token"),
+  backupDatabase: () => invoke<string | null>("backup_database"),
+  exportGamesCsv: () => invoke<string | null>("export_games_csv"),
+  restoreDatabase: () => invoke<BackupInfo | null>("restore_database"),
+  deleteAllData: (forgetKeys: boolean) => invoke<void>("delete_all_data", { forgetKeys }),
+  openDataFolder: () => invoke<void>("open_data_folder"),
+  checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
+  installUpdate: () => invoke<void>("install_update"),
 };
 
 export function onEngineEvent(handler: (e: EngineEvent) => void): Promise<UnlistenFn> {
