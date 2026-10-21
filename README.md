@@ -45,7 +45,7 @@ export and delete, and an MCP server for AI agents. See [Roadmap](#roadmap).
 
 ## Getting started
 
-1. **Install.** Download `Rift Coach_<version>_x64-setup.exe` from the
+1. **Install.** Download `Rift-Coach_<version>_x64-setup.exe` from the
    [latest release](https://github.com/tmaiorca/rift-coach/releases/latest) and run it (see
    [Installing and updating](#installing-and-updating)).
 2. **First-run setup.** The app opens a short setup:
