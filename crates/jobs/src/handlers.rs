@@ -28,6 +28,8 @@ const RANK_MAX_AGE_MS: i64 = 6 * 3600 * 1000;
 /// live start time is estimated from the game clock).
 const LIVE_MATCH_WINDOW_MS: i64 = 5 * 60 * 1000;
 const DAY_MS: i64 = 24 * 3600 * 1000;
+/// Unreviewed vision frames are deleted this long after their game ended.
+const VISION_KEEP_MS: i64 = DAY_MS;
 
 #[derive(Debug)]
 pub(crate) enum JobError {
@@ -80,7 +82,114 @@ impl Engine {
             Job::PostGame { account_id, live_game_id } => self.post_game(*account_id, *live_game_id).await,
             Job::FetchRank { account_id } => self.fetch_rank(*account_id).await,
             Job::WeeklyReport { account_id, week } => self.weekly_report(*account_id, week).await,
+            Job::VisionReview { account_id, live_game_id } => self.vision_review(*account_id, *live_game_id).await,
         }
+    }
+
+    async fn vision_review(&self, account_id: i64, live_game_id: i64) -> JobResult {
+        let store = self.frame_store().cloned().ok_or_else(|| JobError::Permanent("no frames folder".into()))?;
+        let live = self
+            .db
+            .call(move |c| rc_store::live::get(c, live_game_id))
+            .await?
+            .ok_or_else(|| JobError::Permanent(format!("live game {live_game_id} no longer exists")))?;
+        if live.vision_report_id.is_some() {
+            let _ = store.delete(live_game_id);
+            return Ok(());
+        }
+        let match_id =
+            live.match_id.ok_or_else(|| JobError::Permanent("the game isn't linked to a match yet".into()))?;
+        let settings = self.db.call(|c| rc_store::settings::app(c)).await?;
+        let client = rc_coach::provider::vision_client(&settings.vision)
+            .map_err(|e| JobError::Permanent(format!("vision review: {e}")))?;
+        let opts = rc_coach::vision::VisionOptions::from_settings(&settings);
+        match rc_coach::vision::vision_review(&self.db, &client, &store, account_id, &match_id, live_game_id, &opts)
+            .await
+        {
+            Ok(report) => {
+                let report_id = report.id;
+                self.db.call(move |c| rc_store::live::set_vision_report(c, live_game_id, report_id)).await?;
+                if let Err(e) = store.delete(live_game_id) {
+                    tracing::warn!(live_game_id, error = %e, "could not delete reviewed frames");
+                }
+                self.emit(EngineEvent::VisionReviewReady { match_id, report_id });
+                Ok(())
+            }
+            Err(e) => {
+                let err = review_error(e);
+                if matches!(err, JobError::Permanent(_)) {
+                    // Frames stay until the cleanup, so a fix (key, model) can retry.
+                    self.db.call(move |c| rc_store::live::set_vision_state(c, live_game_id, "failed")).await?;
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// Deletes frames that are no longer needed: reviewed, from games that
+    /// are gone, or older than [`VISION_KEEP_MS`] without a review.
+    pub(crate) async fn sweep_vision_frames(&self) -> Result<usize, rc_store::StoreError> {
+        let Some(store) = self.frame_store().cloned() else { return Ok(0) };
+        let ids = store.games();
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let now = rc_common::time::now_ms();
+        let keep: Vec<i64> = self
+            .db
+            .call(move |c| {
+                let mut keep = Vec::new();
+                for id in ids {
+                    let Some(g) = rc_store::live::get(c, id)? else { continue };
+                    let waiting = matches!(g.vision_state.as_deref(), None | Some("captured" | "failed"));
+                    let fresh = g.ended_at.is_none_or(|t| now - t < VISION_KEEP_MS);
+                    if waiting && fresh && g.vision_report_id.is_none() {
+                        keep.push(id);
+                    }
+                }
+                Ok(keep)
+            })
+            .await?;
+        let deleted = tokio::task::spawn_blocking(move || store.sweep(|id| keep.contains(&id)))
+            .await
+            .map_err(|e| rc_store::StoreError::Join(e.to_string()))?;
+        if !deleted.is_empty() {
+            tracing::info!(games = deleted.len(), "deleted vision frames");
+            let ids = deleted.clone();
+            self.db
+                .call(move |c| {
+                    for id in ids {
+                        if rc_store::live::get(c, id)?.is_some_and(|g| g.vision_report_id.is_none()) {
+                            rc_store::live::set_vision_state(c, id, "deleted")?;
+                        }
+                    }
+                    Ok(())
+                })
+                .await?;
+        }
+        Ok(deleted.len())
+    }
+
+    /// Queues the vision review of a live game that has frames, if automatic
+    /// vision reviews are on. Returns whether it did.
+    async fn maybe_queue_vision_review(&self, live_game_id: i64) -> Result<bool, JobError> {
+        let Some(store) = self.frame_store() else { return Ok(false) };
+        if store.list(live_game_id).is_empty() {
+            return Ok(false);
+        }
+        let target = self
+            .db
+            .call(move |c| {
+                let s = rc_store::settings::app(c)?;
+                let g = rc_store::live::get(c, live_game_id)?;
+                Ok(g.filter(|g| s.vision.auto_review && g.vision_state.as_deref() == Some("captured"))
+                    .and_then(|g| g.account_id))
+            })
+            .await?;
+        if let Some(account_id) = target {
+            self.enqueue(Job::VisionReview { account_id, live_game_id }).await?;
+        }
+        Ok(target.is_some())
     }
 
     async fn fetch_rank(&self, account_id: i64) -> JobResult {
@@ -199,6 +308,7 @@ impl Engine {
         if let Some(live_game_id) = marked {
             self.emit(EngineEvent::PostGameReady { live_game_id, match_id: match_id.to_owned(), review_queued });
             self.prune_live_snapshots().await?;
+            self.maybe_queue_vision_review(live_game_id).await?;
         }
         Ok(())
     }

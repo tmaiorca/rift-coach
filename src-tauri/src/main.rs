@@ -6,6 +6,7 @@ mod data;
 mod desktop;
 mod mcp_host;
 mod updates;
+mod vision;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -93,6 +94,9 @@ async fn notify_post_game(app: &AppHandle, engine: &Engine, ev: &EngineEvent) {
                 return;
             }
             ("AI review ready", "Your post-game review is waiting in Rift Coach.")
+        }
+        EngineEvent::VisionReviewReady { .. } => {
+            ("Vision review ready", "Your screenshot review of the last game is waiting in Rift Coach.")
         }
         _ => return,
     };
@@ -282,6 +286,10 @@ fn main() {
             commands::generate_game_plan,
             commands::champion_list,
             commands::champion_detail,
+            vision::vision_status,
+            vision::generate_vision_review,
+            vision::vision_disk_usage,
+            vision::delete_vision_frames,
             desktop::autostart_enabled,
             desktop::set_autostart,
             mcp_host::mcp_status,

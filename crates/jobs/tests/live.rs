@@ -254,3 +254,73 @@ async fn live_game_holds_work_and_links_the_finished_match() {
         .expect("q");
     assert!(brief_json.is_some_and(|j| j.contains("777") && !j.contains("Someone")), "brief stored, no names");
 }
+
+/// Real screen capture through the poller (not in CI: needs a window). Run with
+/// `$env:RIFT_COACH_VISION_WINDOW = "<part of a window title>"` and
+/// `cargo test -p rc-jobs --test live -- --ignored vision`.
+#[tokio::test]
+#[ignore = "captures a real window; set RIFT_COACH_VISION_WINDOW"]
+async fn vision_capture_during_a_game() {
+    assert!(std::env::var(rc_vision::WINDOW_ENV).is_ok(), "set {}", rc_vision::WINDOW_ENV);
+    let riot = MockServer::start().await;
+    let ddragon = MockServer::start().await;
+    let script = Arc::new(Mutex::new(Script::Loading));
+    let game = MockGame { riot_id: "Me#NA1".into(), ..Default::default() };
+    let live = MockServer::start().await;
+    Mock::given(path("/liveclientdata/allgamedata"))
+        .respond_with(LiveResponder { script: script.clone(), game: game.clone() })
+        .mount(&live)
+        .await;
+    let dir = tempfile::tempdir().expect("tmp");
+    let db = Db::open(&dir.path().join("t.db")).expect("db");
+    let client = RiotClient::new(Some(Secret::new("RGAPI-test")), Arc::new(RateLimiter::personal_key()))
+        .expect("client")
+        .with_base_url(riot.uri().parse().expect("url"));
+    let cache = DdragonCache::with_base_url(dir.path().join("dd"), db.clone(), &ddragon.uri()).expect("dd");
+    let engine = Engine::new(db.clone(), Arc::new(client), Arc::new(cache), EngineConfig::default());
+    let store = rc_vision::FrameStore::new(dir.path().join("vision"));
+    engine.set_frame_store(store.clone());
+    db.with(|c| {
+        rc_store::accounts::upsert_account(c, "Me", "NA1", "na1", "americas", true)?;
+        let mut s = rc_store::settings::app(c)?;
+        s.vision.enabled = true;
+        s.vision.interval_s = 3;
+        rc_store::settings::set(c, rc_store::settings::APP, &s)
+    })
+    .expect("setup");
+    let handle = spawn_live(
+        engine.clone(),
+        LiveConfig {
+            url: live.uri(),
+            max_poll: Some(Duration::from_millis(200)),
+            footprint_every: Duration::from_secs(1),
+            post_game_delay: Duration::from_secs(3600),
+        },
+    )
+    .expect("live");
+    let mut rx = handle.state.clone();
+    *script.lock().expect("lock") = Script::At(60.0);
+    let s = wait_state(&mut rx, "in game", |s| s.phase == Phase::InGame && s.live_game_id.is_some()).await;
+    let id = s.live_game_id.expect("id");
+    // 15 s of game, the clock moving with real time.
+    for i in 1..=15 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        *script.lock().expect("lock") = Script::At(60.0 + f64::from(i));
+    }
+    let s = rx.borrow().clone();
+    let v = s.vision.expect("vision status in the live state");
+    assert!(v.running, "{v:?}");
+    *script.lock().expect("lock") = Script::At(game.duration_s + 1.0);
+    wait_state(&mut rx, "end", |s| s.phase == Phase::Ended).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let row = db.with(|c| rc_store::live::get(c, id)).expect("q").expect("row");
+    assert_eq!(row.vision_state.as_deref(), Some("captured"));
+    let stats: rc_vision::CaptureStats =
+        serde_json::from_str(row.vision_json.as_deref().expect("stats")).expect("json");
+    println!("{stats:#?}");
+    let times = store.list(id);
+    assert_eq!(times.len() as u32, stats.frames);
+    assert!(stats.frames >= 3, "{stats:?}");
+    assert!(times.windows(2).all(|w| w[1] - w[0] >= 2_500), "about 3 s apart: {times:?}");
+    assert!(times[0] >= 60_000 && times[0] < 80_000, "stamped with game time: {times:?}");
+}

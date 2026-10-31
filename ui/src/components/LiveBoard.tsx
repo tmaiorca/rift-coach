@@ -200,6 +200,14 @@ export function LiveBoard({ state, compact = false }: { state: LiveState; compac
         </div>
       )}
 
+      {!compact && state.vision && (
+        <p className="muted small-text">
+          {state.vision.running
+            ? `Screenshots for your after-game vision review: ${state.vision.frames} taken, one every ${state.vision.interval_s.toFixed(0)} s (${state.vision.avg_ms.toFixed(0)} ms each).`
+            : "Vision review is on: waiting for the game window to take screenshots."}
+          {state.vision.error ? ` ${state.vision.error}` : ""}
+        </p>
+      )}
       {!compact && (
         <p className="muted small-text">
           Your own numbers from the game client, with targets you set before the game. Rift Coach doesn't

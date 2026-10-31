@@ -128,6 +128,71 @@ enum Command {
         #[arg(long, default_value_t = 20.0)]
         hold: f64,
     },
+    /// Capture a window the way vision review captures the game, and report
+    /// the cost per frame and this process's CPU (no League needed).
+    VisionCapture {
+        /// Part of the window title to capture (default: the League game window),
+        /// e.g. "Notepad" or a browser playing a VOD.
+        #[arg(long)]
+        window: Option<String>,
+        #[arg(long, default_value_t = 30)]
+        seconds: u64,
+        #[arg(long, default_value_t = 4.0)]
+        interval: f64,
+        #[arg(long, default_value_t = 1280)]
+        width: u32,
+        /// Keep the frames in this folder (default: a temporary folder, deleted).
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
+}
+
+async fn vision_capture(
+    window: Option<String>,
+    seconds: u64,
+    interval: f64,
+    width: u32,
+    out: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    let tmp = tempfile::tempdir()?;
+    let dir = out.clone().unwrap_or_else(|| tmp.path().to_path_buf());
+    let clock = Arc::new(rc_vision::GameClock::default());
+    let store = rc_vision::FrameStore::new(&dir);
+    let mut session = rc_vision::Session::new(rc_vision::CaptureConfig {
+        live_game_id: 1,
+        interval: Duration::from_secs_f64(interval),
+        max_width: width,
+        store: store.clone(),
+        clock: clock.clone(),
+        window,
+    });
+    let start = Instant::now();
+    clock.set(0.0);
+    session.ensure_running().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut sampler = rc_live::footprint::Sampler::new();
+    let mut footprint = rc_live::footprint::Footprint::default();
+    println!("Capturing for {seconds}s every {interval}s at up to {width}px wide...");
+    while start.elapsed() < Duration::from_secs(seconds) {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        clock.set(start.elapsed().as_secs_f64());
+        if let Some(s) = sampler.as_mut().and_then(rc_live::footprint::Sampler::sample) {
+            footprint.add(s);
+        }
+    }
+    let stats = tokio::task::spawn_blocking(move || session.stop()).await?;
+    println!("{}", serde_json::to_string_pretty(&stats)?);
+    println!(
+        "process CPU avg {:.2}% (of all cores), peak {:.2}%, memory {:.0} MB",
+        footprint.cpu_avg_pct, footprint.cpu_max_pct, footprint.mem_max_mb
+    );
+    let usage = store.usage();
+    println!("{} frames, {:.1} MB on disk", usage.frames, usage.bytes as f64 / 1_048_576.0);
+    if let Some(o) = out {
+        println!("frames kept in {}", o.display());
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -148,6 +213,9 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Summary => summary(&paths),
+        Command::VisionCapture { window, seconds, interval, width, out } => {
+            vision_capture(window, seconds, interval, width, out).await
+        }
         Command::MockLive { port, speed, minutes, champion, riot_id, mode, lose, loading, hold } => {
             let (default_id, default_champ) = mock_defaults(&paths)?;
             let riot_id = riot_id.or(default_id).ok_or_else(|| anyhow::anyhow!("no account yet: pass --riot-id"))?;
@@ -178,7 +246,10 @@ async fn main() -> anyhow::Result<()> {
                 Command::RecordFixtures { riot_id, platform, matches, out } => {
                     fixtures::record(engine.riot(), &riot_id, platform, matches, &out).await
                 }
-                Command::ScrubFixtures { .. } | Command::Summary | Command::MockLive { .. } => {
+                Command::ScrubFixtures { .. }
+                | Command::Summary
+                | Command::MockLive { .. }
+                | Command::VisionCapture { .. } => {
                     unreachable!("handled above")
                 }
             }

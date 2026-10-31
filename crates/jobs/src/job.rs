@@ -56,6 +56,12 @@ pub enum Job {
         account_id: i64,
         week: String,
     },
+    /// Vision review of a live game's screenshots (after it is analyzed).
+    /// Deletes the frames once the review is stored.
+    VisionReview {
+        account_id: i64,
+        live_game_id: i64,
+    },
 }
 
 impl Job {
@@ -72,6 +78,7 @@ impl Job {
             Self::PostGame { .. } => "post_game",
             Self::FetchRank { .. } => "fetch_rank",
             Self::WeeklyReport { .. } => "weekly_report",
+            Self::VisionReview { .. } => "vision_review",
         }
     }
 
@@ -89,6 +96,7 @@ impl Job {
             Self::PostGame { live_game_id, .. } => format!("post_game:{live_game_id}"),
             Self::FetchRank { account_id } => format!("rank:{account_id}"),
             Self::WeeklyReport { account_id, week } => format!("weekly:{account_id}:{week}"),
+            Self::VisionReview { live_game_id, .. } => format!("vision:{live_game_id}"),
         }
     }
 
@@ -106,7 +114,10 @@ impl Job {
             Self::ComputeMetrics { .. } => 70,
             Self::FetchMatch { .. } => 50,
             Self::FetchTimeline { .. } => 40,
-            Self::AiReview { .. } | Self::SessionReview { .. } | Self::WeeklyReport { .. } => 20,
+            Self::AiReview { .. }
+            | Self::SessionReview { .. }
+            | Self::WeeklyReport { .. }
+            | Self::VisionReview { .. } => 20,
         }
     }
 
@@ -116,7 +127,10 @@ impl Job {
             Self::FetchMatch { .. } | Self::FetchTimeline { .. } => 8,
             // With the default backoff this keeps looking for about 1.5 hours.
             Self::PostGame { .. } => 10,
-            Self::AiReview { .. } | Self::SessionReview { .. } | Self::WeeklyReport { .. } => 3,
+            Self::AiReview { .. }
+            | Self::SessionReview { .. }
+            | Self::WeeklyReport { .. }
+            | Self::VisionReview { .. } => 3,
             _ => 5,
         }
     }
@@ -135,6 +149,7 @@ impl Job {
             Self::PostGame { .. } => "find your last game".to_owned(),
             Self::FetchRank { account_id } => format!("rank for account {account_id}"),
             Self::WeeklyReport { week, .. } => format!("AI weekly report ({week})"),
+            Self::VisionReview { .. } => "vision review of your last game".to_owned(),
         }
     }
 

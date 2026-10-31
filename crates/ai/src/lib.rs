@@ -5,12 +5,15 @@
 
 use std::time::Duration;
 
+use base64::Engine as _;
 use rc_common::Secret;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 const TIMEOUT: Duration = Duration::from_secs(180);
+/// Requests with images upload a few MB and take longer to answer.
+const IMAGE_TIMEOUT: Duration = Duration::from_secs(360);
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +113,35 @@ pub struct CompletionRequest {
     pub max_tokens: u32,
     /// Ask the provider for JSON output where it supports a JSON mode.
     pub json: bool,
+    /// Images sent after `user`, each preceded by its caption. Empty for
+    /// text-only requests (the request is then sent exactly as before).
+    pub images: Vec<ImagePart>,
+}
+
+/// One image for a vision request.
+#[derive(Clone)]
+pub struct ImagePart {
+    /// Text placed right before the image (e.g. which moment and time it shows).
+    pub caption: String,
+    /// `image/jpeg` or `image/png`.
+    pub media_type: &'static str,
+    pub data: Vec<u8>,
+}
+
+impl std::fmt::Debug for ImagePart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImagePart")
+            .field("caption", &self.caption)
+            .field("media_type", &self.media_type)
+            .field("bytes", &self.data.len())
+            .finish()
+    }
+}
+
+impl ImagePart {
+    fn base64(&self) -> String {
+        base64::engine::general_purpose::STANDARD.encode(&self.data)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -231,16 +263,31 @@ impl AiClient {
             return Err(AiError::MissingModel);
         }
         let base = self.config.base_url();
-        tracing::info!(provider = self.config.kind.as_str(), model, "AI request");
+        tracing::info!(provider = self.config.kind.as_str(), model, images = req.images.len(), "AI request");
+        let timeout = if req.images.is_empty() { TIMEOUT } else { IMAGE_TIMEOUT };
+        let post = |url: String, body: &Value| self.http.post(url).timeout(timeout).json(body);
         match self.config.kind {
             ProviderKind::Anthropic => {
+                let content = if req.images.is_empty() {
+                    json!(req.user)
+                } else {
+                    let mut parts = vec![json!({"type": "text", "text": req.user})];
+                    for img in &req.images {
+                        parts.push(json!({"type": "text", "text": img.caption}));
+                        parts.push(json!({
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": img.media_type, "data": img.base64()},
+                        }));
+                    }
+                    Value::Array(parts)
+                };
                 let body = json!({
                     "model": model,
                     "max_tokens": req.max_tokens,
                     "system": req.system,
-                    "messages": [{"role": "user", "content": req.user}],
+                    "messages": [{"role": "user", "content": content}],
                 });
-                let v = self.send(self.http.post(format!("{base}/v1/messages")).json(&body)).await?;
+                let v = self.send(post(format!("{base}/v1/messages"), &body)).await?;
                 let text = v["content"]
                     .as_array()
                     .map(|parts| {
@@ -258,11 +305,27 @@ impl AiClient {
                 })
             }
             ProviderKind::OpenAi | ProviderKind::OpenAiCompatible => {
+                let content = if req.images.is_empty() {
+                    json!(req.user)
+                } else {
+                    let mut parts = vec![json!({"type": "text", "text": req.user})];
+                    for img in &req.images {
+                        parts.push(json!({"type": "text", "text": img.caption}));
+                        parts.push(json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:{};base64,{}", img.media_type, img.base64()),
+                                "detail": "high",
+                            },
+                        }));
+                    }
+                    Value::Array(parts)
+                };
                 let mut body = json!({
                     "model": model,
                     "messages": [
                         {"role": "system", "content": req.system},
-                        {"role": "user", "content": req.user},
+                        {"role": "user", "content": content},
                     ],
                 });
                 if self.config.kind == ProviderKind::OpenAi {
@@ -273,7 +336,7 @@ impl AiClient {
                 } else {
                     body["max_tokens"] = json!(req.max_tokens);
                 }
-                let v = self.send(self.http.post(format!("{base}/chat/completions")).json(&body)).await?;
+                let v = self.send(post(format!("{base}/chat/completions"), &body)).await?;
                 let text = v["choices"][0]["message"]["content"].as_str().unwrap_or_default().to_owned();
                 Ok(Completion {
                     text: non_empty(text)?,
@@ -286,15 +349,18 @@ impl AiClient {
                 if req.json {
                     config["responseMimeType"] = json!("application/json");
                 }
+                let mut parts = vec![json!({"text": req.user})];
+                for img in &req.images {
+                    parts.push(json!({"text": img.caption}));
+                    parts.push(json!({"inline_data": {"mime_type": img.media_type, "data": img.base64()}}));
+                }
                 let body = json!({
                     "systemInstruction": {"parts": [{"text": req.system}]},
-                    "contents": [{"role": "user", "parts": [{"text": req.user}]}],
+                    "contents": [{"role": "user", "parts": parts}],
                     "generationConfig": config,
                 });
                 let model = model.trim_start_matches("models/");
-                let v = self
-                    .send(self.http.post(format!("{base}/v1beta/models/{model}:generateContent")).json(&body))
-                    .await?;
+                let v = self.send(post(format!("{base}/v1beta/models/{model}:generateContent"), &body)).await?;
                 let text = v["candidates"][0]["content"]["parts"]
                     .as_array()
                     .map(|parts| parts.iter().filter_map(|p| p["text"].as_str()).collect::<String>())

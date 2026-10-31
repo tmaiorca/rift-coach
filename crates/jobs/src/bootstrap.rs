@@ -27,5 +27,7 @@ pub fn build_engine(
     let db = Db::open(&paths.db_file)?;
     let riot = Arc::new(RiotClient::new(key, Arc::new(RateLimiter::personal_key()))?);
     let ddragon = Arc::new(DdragonCache::new(&paths.ddragon_dir, db.clone())?);
-    Ok(Engine::new(db, riot, ddragon, config))
+    let engine = Engine::new(db, riot, ddragon, config);
+    engine.set_frame_store(rc_vision::FrameStore::new(&paths.vision_dir));
+    Ok(engine)
 }

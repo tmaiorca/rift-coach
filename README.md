@@ -11,16 +11,17 @@ would rank among them. Everything follows the champions and roles *you*
 play, whoever you are: champion pages, patterns and benchmarks pick them up
 from your games. While you play it stays out of the
 way: it shows only your own numbers on a second screen, pauses its background
-work, and analyzes the game as soon as Riot publishes it. Everything stays on
-your PC, and AI agents such as Claude Desktop can read it (read-only) through
-its MCP server.
+work, and analyzes the game as soon as Riot publishes it. If you turn on vision
+review, it also saves screenshots of your game and, after the game, has a vision
+model review what your screen showed around your deaths and objective fights.
+Everything stays on your PC, and AI agents such as Claude Desktop can read it
+(read-only) through its MCP server.
 
 > This guide is also the **Guide** page inside the app. It's one file
 > (`README.md`), so the app and GitHub always show the same text.
 
-**Status:** all 6 phases built: Windows installer with signed auto-updates,
-first-run setup, tray and start with Windows, champion pages, data backup,
-export and delete, and an MCP server for AI agents. See [Roadmap](#roadmap).
+**Status:** 7 phases built. The latest adds an optional vision review of
+screenshots after each game. See [Roadmap](#roadmap).
 
 ## Contents
 
@@ -35,6 +36,7 @@ export and delete, and an MCP server for AI agents. See [Roadmap](#roadmap).
 - [Live games](#live-games)
 - [The loading-screen brief](#the-loading-screen-brief)
 - [The AI coach](#the-ai-coach)
+- [Vision review (screenshots)](#vision-review-screenshots)
 - [AI agents (MCP)](#ai-agents-mcp)
 - [Settings](#settings)
 - [Your data, keys and privacy](#your-data-keys-and-privacy)
@@ -434,6 +436,67 @@ If the app opens mid-game you still get the brief, but no AI plan.
   last day; checked every 10 minutes). Older games pulled in by a sync are
   never auto-reviewed.
 
+## Vision review (screenshots)
+
+Optional, off by default (Settings → Vision review). Rift Coach takes a
+screenshot of the League game window every few seconds while you play, and
+after the game a vision model looks at the ones that matter: what your screen
+showed before each death, around objective fights, and at fixed laning
+checkpoints. It catches what match data can't: the enemies missing from your
+minimap, the ward you didn't have, the wave you walked away from, where you
+stood when the fight started.
+
+**During the game, nothing happens but the screenshots.** They're saved to
+disk and that's it: no AI, no analysis and nothing on screen until the game is
+over (Riot's rules, see below). The Live page only says how many have been
+taken.
+
+- **Only the game window** is captured (Windows Graphics Capture, the API OBS
+  uses), never your other windows or monitors, and without the cursor or the
+  capture border. Summoner's Rift games of your tracked accounts only.
+- **Cost to your game.** Each screenshot is copied from the GPU, shrunk and
+  saved as a JPEG on a background thread: about 20–30 ms of one CPU core, and
+  0.1% of the whole CPU on average at one every 3–4 seconds (measured on this
+  project's test PC). If a screenshot takes longer than usual because your PC
+  is busy, the next ones wait twice as long. Your own numbers per game are in
+  the footprint table on the Live page.
+- **Which screenshots are sent.** From the match timeline, after the game:
+  up to 3 before each of your deaths (about 15, 6 and 1 seconds before),
+  3 around each objective fight (dragon, voidgrubs, Herald, Baron, Atakhan),
+  and one at 5:00, 10:00 and 14:00. Deaths before 14:00 and deaths that gave
+  away an objective come first. With many deaths, each gets fewer, so the
+  total stays within **Screenshots per review** (default 24).
+- **What the model gets.** The screenshots, each captioned with its moment and
+  game time, and the moments' facts from Riot's data (killer champion, map
+  area, gold against your lane opponent, who took the objective). Other
+  players are named only by champion. A screenshot can show names (health
+  bars, scoreboard, chat): the model is told never to write them, and any
+  other player's name in its reply is replaced by their champion before the
+  review is saved.
+- **What you get** (on the match page, under the AI coach): a summary,
+  patterns across the moments, and a card per moment with what the
+  screenshots show and what to do next time, tagged by category (positioning,
+  map awareness, vision, waves, trading, objective setup, recall timing,
+  teamfights, macro), plus one habit for your next game. Moments the model
+  couldn't read are marked "screenshots unclear".
+- **Automatic or on demand.** With **Review automatically** on (the default
+  once vision review is enabled), the review runs once the game is analyzed;
+  otherwise click **Review screenshots** on the match page.
+- **Then the screenshots are deleted.** All of them, as soon as the review is
+  saved. Screenshots that were never reviewed are deleted a day after the game.
+  **Delete screenshots now** in Settings removes them all at once.
+- **Provider and cost.** The vision provider and model are chosen separately
+  from the AI coach's (use any model that accepts images: Claude, GPT, Gemini,
+  or an OpenAI-compatible server with a vision model). Keys are shared: one per
+  provider, saved in AI coach. At 1280 px a screenshot is roughly 1,200 input
+  tokens with Claude (similar elsewhere), so a 24-screenshot review is about
+  30,000 tokens in plus 1,000–2,000 out. Vision reviews count toward the
+  token cap. 960 px is cheaper; 1600 px makes the minimap sharper.
+- **Fullscreen.** In exclusive Fullscreen, Windows can only hand back black
+  frames; they're skipped and the Live page says to switch League to
+  **Borderless** (or Windowed) in its video settings. Windows 11 is needed (to
+  capture without drawing a border on the game).
+
 ## AI agents (MCP)
 
 Rift Coach includes an [MCP](https://modelcontextprotocol.io) server, so Claude
@@ -497,6 +560,13 @@ are refused, so a website you visit can't read your data through it.
 | CS per minute target | Target for live CS pacing. Empty = your CS/min goal, else your own average in the role |
 | Keep live snapshots | Days to keep a game's 15-second snapshots after it's analyzed (default 7; 0 = delete right away) |
 | Automatically review each new game / each play session | See above |
+| Take screenshots during Summoner's Rift games | Vision review on/off (default off). See [Vision review](#vision-review-screenshots) |
+| Review automatically after each game | Run the vision review once the game is analyzed (default on) |
+| Screenshot every | 3, 4 (default), 5, 6, 8 or 10 seconds |
+| Screenshot size | 960, 1280 (default) or 1600 px wide |
+| Screenshots per review | Up to 12, 18, 24 (default), 36 or 48 sent per game |
+| Vision provider, model, endpoint, max output tokens | The vision model, separate from the AI coach (keys are shared per provider); default 6000 output tokens |
+| Delete screenshots now | Removes every stored screenshot (shown with how much space they use) |
 | Token cap (last 30 days) | Stop generating reviews once this many tokens were used in the last 30 days; shows your usage. Empty = no cap |
 | Look-back window | How many of your recent games feed baselines, patterns, the dashboard and trends (default 30) |
 | Session gap | Games less than this many minutes apart are one session (default 60) |
@@ -532,6 +602,11 @@ are refused, so a website you visit can't read your data through it.
   restarts as a fresh install. Tick the box to also remove the saved Riot, AI
   and MCP keys and turn off start with Windows. Uninstalling the app doesn't
   delete your data on its own.
+- **Screenshots** (vision review) are stored in `%LOCALAPPDATA%\RiftCoach\vision`
+  only until they're reviewed, then deleted; unreviewed ones are deleted a day
+  after the game. Only the screenshots picked for a review leave your PC, and
+  only to the vision provider you chose. Backups don't include screenshots;
+  restoring a backup or deleting your data removes them.
 - The MCP server's access token is kept in Credential Manager like the other
   keys. The HTTP server is off by default and on this PC only unless you allow
   your network.
@@ -552,7 +627,10 @@ gameplay", reveal hidden information, or automate input. So Rift Coach:
 - shows only your own factual numbers during a game, next to targets you set
   beforehand. The live data includes other players' scoreboard entries; the
   app drops them while reading and never stores or shows them;
-- never draws an overlay on the game or sends input to it.
+- never draws an overlay on the game or sends input to it;
+- with vision review on, only saves screenshots of your game window during the
+  game. Nothing looks at them until the game is over, and nothing from them is
+  shown during a game.
 
 ## Troubleshooting
 
@@ -577,6 +655,10 @@ gameplay", reveal hidden information, or automate input. So Rift Coach:
 | The MCP server says it couldn't listen on its port | Another program uses the port; pick another one in Settings → AI agents |
 | An agent on another PC can't connect | Turn on **Allow devices on my network**, allow Rift Coach through Windows Firewall (private networks), and send the access token |
 | Closing the window doesn't quit | It's in the tray; right-click the tray icon → **Quit**, or turn off "Keep running in the tray" |
+| Vision review: "frames are black" | League is in exclusive Fullscreen: Video settings → Window mode → **Borderless** |
+| Vision review: "can't hide the capture border" | Screenshots need Windows 11 |
+| Vision review: no screenshots taken | Check Settings → Vision review is on, the game was Summoner's Rift on a tracked account, and the Live page showed screenshots being taken |
+| Vision review failed | Settings → Vision review: check the provider has a saved key, pick a model that accepts images, **Test connection**, then **Review screenshots** on the match (within a day of the game) |
 
 ## For developers
 
@@ -593,7 +675,14 @@ cargo run -p rc-cli -- analyze       # print the newest game's metrics and perce
 cargo run -p rc-cli -- patterns --games 100 --sessions   # patterns, win links, sessions
 cargo run -p rc-cli -- mock-live --speed 10              # a scripted game for the live view
 cargo run -p rc-cli -- benchmarks [--collect 5]          # benchmark progress and gaps (collect for 5 min first)
+cargo run --release -p rc-cli -- vision-capture --window "Notepad"   # screenshot cost per frame, any window
 ```
+
+Vision capture looks for the window titled `League of Legends (TM) Client`. To
+try it without League, set `RIFT_COACH_VISION_WINDOW` to part of another
+window's title (it must keep changing; Windows only delivers frames when the
+window redraws) and run `mock-live --mode CLASSIC` with vision review on, or
+`cargo test -p rc-jobs --test live -- --ignored vision`.
 
 To try the live view without League, run `mock-live` in one terminal and the
 app pointed at it in another:
@@ -625,3 +714,4 @@ replaced.
 4. ✅ Live companion (your own numbers only), game-aware scheduling, analysis and review at game end, footprint measurement.
 5. ✅ Higher-rank benchmarks by patch, benchmark percentiles, weekly reports, loading-screen brief and AI game plan, rank.
 6. ✅ MCP server for AI agents (stdio and HTTP, LAN with a token), Windows installer, signed auto-update, first-run setup, tray and start with Windows, data backup/restore/export/delete, champion pages, rank-relative benchmarks.
+7. ✅ Vision review: screenshots of the game window during games, reviewed by a vision model after the game around deaths, objectives and laning checkpoints, then deleted.

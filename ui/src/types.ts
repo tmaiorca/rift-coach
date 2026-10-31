@@ -373,6 +373,94 @@ export interface AppSettings {
     keep_snapshots_days: number;
     notify: boolean;
   };
+  vision: VisionSettings;
+}
+
+/** Mirrors rc_store::settings::VisionSettings. */
+export interface VisionSettings {
+  enabled: boolean;
+  interval_s: number;
+  max_width: number;
+  max_frames: number;
+  auto_review: boolean;
+  provider: ProviderId;
+  model: string;
+  base_url: string | null;
+  max_tokens: number;
+}
+
+/** Mirrors rc_vision::CaptureStats. */
+export interface CaptureStats {
+  frames: number;
+  bytes: number;
+  width: number;
+  height: number;
+  avg_ms: number;
+  max_ms: number;
+  slowed: number;
+  black: number;
+  sessions: number;
+  interval_s: number;
+  error: string | null;
+}
+
+export interface DiskUsage {
+  games: number;
+  frames: number;
+  bytes: number;
+}
+
+export type VisionState = "captured" | "reviewed" | "failed" | "deleted";
+
+export interface VisionView {
+  enabled: boolean;
+  live_game_id: number | null;
+  state: VisionState | null;
+  frames_on_disk: number;
+  stats: CaptureStats | null;
+  report: Report | null;
+  queued: boolean;
+}
+
+export type VisionCategory =
+  | "positioning"
+  | "map_awareness"
+  | "vision"
+  | "wave_management"
+  | "trading"
+  | "objective_setup"
+  | "recall_timing"
+  | "teamfight"
+  | "macro"
+  | "other";
+
+/** A vision review's output (`Report.output` when `kind` is "vision"). */
+export interface VisionReviewOutput {
+  summary: string;
+  moments: {
+    id: string;
+    /** Added by the app from the facts. */
+    time?: string;
+    kind?: "death" | "objective" | "checkpoint";
+    title: string;
+    seen: string;
+    lesson: string;
+    category: VisionCategory;
+    severity: "low" | "medium" | "high";
+    clear: boolean;
+  }[];
+  themes?: { title: string; detail?: string; moments?: string[] }[];
+  next_game_focus?: { goal: string; how?: string };
+  confidence: "low" | "medium" | "high";
+  confidence_reason?: string;
+}
+
+export interface VisionLive {
+  running: boolean;
+  frames: number;
+  interval_s: number;
+  avg_ms: number;
+  error: string | null;
 }
 
 export interface ChampionEntry {
@@ -393,6 +481,7 @@ export type EngineEvent =
   | { type: "metrics_computed"; match_id: string; benchmark: boolean }
   | { type: "review_ready"; match_id: string; report_id: number }
   | { type: "session_review_ready"; scope: string; report_id: number }
+  | { type: "vision_review_ready"; match_id: string; report_id: number }
   | { type: "live_game_linked"; live_game_id: number; match_id: string }
   | { type: "post_game_ready"; live_game_id: number; match_id: string; review_queued: boolean }
   | { type: "in_game_changed"; in_game: boolean }
@@ -724,6 +813,7 @@ export interface LiveState {
   goals: GoalLive[];
   footprint: Footprint | null;
   brief: BriefState | null;
+  vision: VisionLive | null;
   updated_ms: number;
 }
 
@@ -894,12 +984,16 @@ export interface LiveGameView {
   analyzed_at: number | null;
   report_id: number | null;
   snapshots_pruned: boolean;
+  vision_json: string | null;
+  vision_state: VisionState | null;
+  vision_report_id: number | null;
   status: LiveGameStatus;
   last: OwnSnapshot | null;
   footprint: Footprint | null;
   budget_cpu_avg_pct: number;
   budget_mem_mb: number;
   within_budget: boolean | null;
+  vision: CaptureStats | null;
 }
 
 export interface PlannerItem {

@@ -22,7 +22,9 @@ PC. Full product spec: `SPEC.md`. Architecture notes: `docs/architecture.md`.
   numbers and static pre-game content: no AI reacting to live state, no
   enemy timers/cooldowns, no alerts, no input automation, no memory reading
   (blocked by Riot since 2026-10-06). AI runs only pre-game (after loading
-  screen) and post-game. No MMR/ELO estimates. Flag, don't build, anything
+  screen) and post-game. No MMR/ELO estimates. Vision review may only *save*
+  screenshots of the game window during a game: nothing reads, analyzes or
+  shows anything from them until the game has ended. Flag, don't build, anything
   that crosses these lines. LCU use requires product registration first.
 - **AI keys** follow the same rules: stored only in Windows Credential Manager
   (`rc_common::credentials`, entries `RiftCoach:<name>`), sent only as sensitive
@@ -54,6 +56,8 @@ If `cargo` isn't on PATH in an old shell: `$env:PATH = "$env:USERPROFILE\.cargo\
 | Benchmark progress and gaps | `cargo run -p rc-cli -- benchmarks [--collect MINUTES] [--role MIDDLE] [--champion Leblanc]` |
 | Mock live game (no League needed) | `cargo run -p rc-cli -- mock-live --speed 10 [--mode CLASSIC] [--champion Ahri]` (defaults: primary account, most played champion), then run the app with `$env:RIFT_COACH_LIVE_URL = "http://127.0.0.1:2998"` |
 | MCP over stdio (read-only, real DB) | `cargo build -p rift-coach` then pipe JSON-RPC lines into `target\debug\rift-coach.exe --mcp-stdio` |
+| Vision capture cost (any window) | `cargo run --release -p rc-cli -- vision-capture --window "<title part>" [--interval 3] [--width 1280]` |
+| Real capture through the poller | `$env:RIFT_COACH_VISION_WINDOW = "<title part>"; cargo test -p rc-jobs --test live -- --ignored vision` (the window must keep redrawing) |
 | Installer (release build) | `npm run tauri build` → `target\release\bundle\nsis\`; set `TAURI_SIGNING_PRIVATE_KEY` (contents of `%USERPROFILE%\.tauri\rift-coach-updater.key`) to also sign the updater artifacts |
 | Status / role summary | `cargo run -p rc-cli -- status` / `-- summary` |
 | Endpoint smoke test (live) | `cargo run -p rc-cli -- smoke "TapRooted#BTC"` |
@@ -61,7 +65,8 @@ If `cargo` isn't on PATH in an old shell: `$env:PATH = "$env:USERPROFILE\.cargo\
 
 Set `RIFT_COACH_HOME` to use a different data folder (e.g. a scratch dir), instead of
 `%LOCALAPPDATA%\RiftCoach`. `RUST_LOG` overrides log filters. `RIFT_COACH_LIVE_URL`
-points the live poller at another (loopback-only) Live Client URL.
+points the live poller at another (loopback-only) Live Client URL. `RIFT_COACH_VISION_WINDOW` makes vision capture use
+the window whose title contains it instead of the League game window.
 
 ## Layout
 
@@ -81,10 +86,13 @@ points the live poller at another (loopback-only) Live Client URL.
 - `crates/jobs` (`rc-jobs`): persistent job queue engine + handlers (ingest, metrics, auto review,
   post-game linking, rank, weekly report), `build_engine`, the live poller (`live.rs`, `spawn_live`, pre-game
   brief), the benchmark collector (`bench.rs`, `spawn_benchmarks`)
+- `crates/vision` (`rc-vision`): game-window capture (Windows Graphics Capture via `windows-capture`, `capture.rs`), game
+  clock, downscale + JPEG (`encode.rs`), frames on disk (`frames.rs`), frame selection around moments (`select.rs`).
+  Review logic is `rc-coach::vision` (anchors from the timeline, facts, validation, name scrubbing)
 - `crates/mcp` (`rc-mcp`): read-only MCP server: tools over `rc-coach` views, JSON-RPC protocol, HTTP transport
   (loopback default, LAN + bearer token), stdio transport (`--mcp-stdio`, read-only DB)
 - `cli` (`rc-cli`): dev CLI. `src-tauri` (`rift-coach`): app shell + commands (`commands.rs`), tray/autostart/close-to-tray
-  (`desktop.rs`), MCP lifecycle (`mcp_host.rs`), backup/restore/export/delete (`data.rs`), updater (`updates.rs`). `ui/`: React app
+  (`desktop.rs`), MCP lifecycle (`mcp_host.rs`), backup/restore/export/delete (`data.rs`), updater (`updates.rs`), vision commands (`vision.rs`). `ui/`: React app
   (`pages/` per screen, `components/` shared, `lib/` formatting + cached Data Dragon images)
 - `prompts/`: versioned AI prompts (`<name>.v<N>.md`); bump the version (new file + `PROMPT_VERSION`) when changing one
 
@@ -130,6 +138,10 @@ points the live poller at another (loopback-only) Live Client URL.
   into an agent's context): cap lists like signals/evidence.
 - Restore/delete are staged files applied by `rc_store::maintenance::apply_pending` before the DB opens; never
   swap the database under an open connection. New migrations go in `MIGRATIONS` in `crates/store/src/lib.rs`.
+- Vision: frames live only in `vision/<live_game_id>/` and are deleted after the review (or a day after the game); never
+  store images in the database or send them anywhere but the chosen vision provider after the game. Capture work must
+  stay on the capture thread and drop undue frames before any GPU copy; never draw a capture border or overlay on the
+  game. Other players' Riot ID names in a vision reply are replaced by champions (`scrub_names`).
 - The updater's private signing key lives outside the repo (`%USERPROFILE%\.tauri\rift-coach-updater.key`,
   CI secret `TAURI_SIGNING_PRIVATE_KEY`). Never commit or print it.
 
@@ -150,4 +162,6 @@ points the live poller at another (loopback-only) Live Client URL.
 - Phase 6 (MCP server stdio + HTTP/LAN with token, NSIS installer signed-ready, signed auto-update from
   GitHub releases, first-run setup, tray + start with Windows + single instance, backup/restore/CSV export/delete,
   plus user-requested generalization: Champions page, Auto benchmark tier, looser focus-champion rule): done
-  2026-10-20, pending review.
+  2026-10-20, pushed to GitHub (tmaiorca/rift-coach) with release v0.1.0.
+- Phase 7 (user-requested: vision review: screenshots of the game window during games, reviewed by a separate vision
+  model after the game around deaths/objectives/checkpoints, then deleted; 0.2.0): done 2026-10-31, pending review.

@@ -156,6 +156,7 @@ function Shell() {
           "timeline_stored",
           "metrics_computed",
           "review_ready",
+          "vision_review_ready",
           "session_review_ready",
           "weekly_report_ready",
           "live_game_linked",

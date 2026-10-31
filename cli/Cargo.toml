@@ -8,14 +8,16 @@ publish.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
-rc-coach = { version = "0.1.0", path = "../crates/coach" }
-rc-metrics = { version = "0.1.0", path = "../crates/metrics" }
-rc-common = { version = "0.1.0", path = "../crates/common" }
-rc-ddragon = { version = "0.1.0", path = "../crates/ddragon" }
-rc-jobs = { version = "0.1.0", path = "../crates/jobs" }
-rc-live = { version = "0.1.0", path = "../crates/live" }
-rc-riot = { version = "0.1.0", path = "../crates/riot" }
-rc-store = { version = "0.1.0", path = "../crates/store" }
+rc-coach = { version = "0.2.0", path = "../crates/coach" }
+rc-metrics = { version = "0.2.0", path = "../crates/metrics" }
+rc-common = { version = "0.2.0", path = "../crates/common" }
+rc-ddragon = { version = "0.2.0", path = "../crates/ddragon" }
+rc-jobs = { version = "0.2.0", path = "../crates/jobs" }
+rc-live = { version = "0.2.0", path = "../crates/live" }
+rc-riot = { version = "0.2.0", path = "../crates/riot" }
+rc-store = { version = "0.2.0", path = "../crates/store" }
+rc-vision = { version = "0.2.0", path = "../crates/vision" }
+tempfile = "3.27.0"
 serde_json = "1.0.154"
 tokio = { version = "1.53.3", features = ["full"] }
 tracing = "0.1.44"
@@ -26,4 +28,3 @@ wiremock = "0.6.5"
 workspace = true
 
 [dev-dependencies]
-tempfile = "3.27.0"

@@ -1000,6 +1000,40 @@ button.recent:hover {
   margin-bottom: 12px;
 }
 
+.vision-moments {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.vision-moment {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-gold);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.vision-moment.sev-high {
+  border-left-color: var(--loss);
+}
+
+.vision-moment.sev-low {
+  border-left-color: var(--win);
+}
+
+.vision-moment p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+.vision-moment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
 .review-item p,
 .fixes p {
   margin: 4px 0;

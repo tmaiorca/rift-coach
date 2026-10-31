@@ -15,6 +15,7 @@ pub mod provider;
 pub mod review;
 pub mod sessions;
 pub mod validate;
+pub mod vision;
 pub mod weekly;
 
 #[derive(Debug, thiserror::Error)]

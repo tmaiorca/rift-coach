@@ -3,6 +3,7 @@ import { api } from "../api";
 import { DeathMap } from "../components/DeathMap";
 import { LineChart, type ChartSeries } from "../components/LineChart";
 import { ReviewBody } from "../components/ReviewBody";
+import { VisionPanel } from "../components/VisionPanel";
 import { ChampionIcon, ItemIcon, SpellIcon, useChampionName } from "../lib/assets";
 import { clock, dateTime, formatMetric, pctTone, roleLabel, signed, ZONE_LABEL } from "../lib/format";
 import type {
@@ -59,6 +60,12 @@ export function MatchDetail({ matchId, onBack, onLookup, onOpenSettings, onTrack
         onOpenSettings={onOpenSettings}
         onReport={(r) => setDetail({ ...detail, report: r })}
         onTrackFocus={onTrackFocus}
+      />
+      <VisionPanel
+        matchId={matchId}
+        isRift={detail.is_standard_rift}
+        refreshKey={refreshKey}
+        onOpenSettings={onOpenSettings}
       />
       {detail.patterns.length > 0 && <PatternsPanel d={detail} />}
       {!detail.is_standard_rift && (

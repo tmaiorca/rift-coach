@@ -55,6 +55,15 @@ pub fn enqueue(conn: &Connection, job: &NewJob, now: i64) -> Result<bool> {
     Ok(rerun > 0)
 }
 
+/// A job with this dedupe key is queued or running.
+pub fn is_active(conn: &Connection, dedupe_key: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM jobs WHERE dedupe_key = ?1 AND status IN ('queued', 'running'))",
+        [dedupe_key],
+        |r| r.get(0),
+    )?)
+}
+
 /// Atomically marks the highest-priority due job as running and returns it.
 pub fn claim_next(conn: &Connection, now: i64) -> Result<Option<ClaimedJob>> {
     Ok(conn

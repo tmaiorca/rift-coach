@@ -26,6 +26,11 @@ pub struct LiveGame {
     pub footprint_json: Option<String>,
     pub snapshots_pruned: bool,
     pub created_at: i64,
+    /// Vision capture stats (JSON), when frames were captured.
+    pub vision_json: Option<String>,
+    /// `captured` | `reviewed` | `failed` | `deleted`; `None` = no frames.
+    pub vision_state: Option<String>,
+    pub vision_report_id: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -40,7 +45,7 @@ pub struct NewLiveGame<'a> {
 
 const COLS: &str = "id, account_id, champion_name, champion_ddragon, position, game_mode, started_at, ended_at,
                     end_reason, result, duration_s, final_json, match_id, analyzed_at, report_id, footprint_json,
-                    snapshots_pruned, created_at";
+                    snapshots_pruned, created_at, vision_json, vision_state, vision_report_id";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveGame> {
     Ok(LiveGame {
@@ -62,6 +67,9 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveGame> {
         footprint_json: r.get(15)?,
         snapshots_pruned: r.get(16)?,
         created_at: r.get(17)?,
+        vision_json: r.get(18)?,
+        vision_state: r.get(19)?,
+        vision_report_id: r.get(20)?,
     })
 }
 
@@ -162,6 +170,28 @@ pub fn set_brief(conn: &Connection, id: i64, json: &str) -> Result<()> {
 
 pub fn set_footprint(conn: &Connection, id: i64, json: &str) -> Result<()> {
     conn.execute("UPDATE live_games SET footprint_json = ?2 WHERE id = ?1", params![id, json])?;
+    Ok(())
+}
+
+/// Vision capture finished for a game: its stats and `captured` state.
+pub fn set_vision_captured(conn: &Connection, id: i64, stats_json: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE live_games SET vision_json = ?2, vision_state = 'captured' WHERE id = ?1",
+        params![id, stats_json],
+    )?;
+    Ok(())
+}
+
+pub fn set_vision_state(conn: &Connection, id: i64, state: &str) -> Result<()> {
+    conn.execute("UPDATE live_games SET vision_state = ?2 WHERE id = ?1", params![id, state])?;
+    Ok(())
+}
+
+pub fn set_vision_report(conn: &Connection, id: i64, report_id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE live_games SET vision_report_id = ?2, vision_state = 'reviewed' WHERE id = ?1",
+        params![id, report_id],
+    )?;
     Ok(())
 }
 
@@ -284,6 +314,19 @@ mod tests {
             assert_eq!(close_stale(c, 2_500, 7_000)?, 0, "only games started before the cutoff");
             assert_eq!(close_stale(c, 4_000, 7_000)?, 1);
             assert_eq!(get(c, open)?.and_then(|g| g.end_reason), Some("disappeared".into()));
+
+            assert_eq!(get(c, a)?.and_then(|g| g.vision_state), None);
+            set_vision_captured(c, a, "{\"frames\":3}")?;
+            let g = get(c, a)?.expect("game");
+            assert_eq!(
+                (g.vision_state.as_deref(), g.vision_json.as_deref()),
+                (Some("captured"), Some("{\"frames\":3}"))
+            );
+            set_vision_report(c, a, 42)?;
+            let g = get(c, a)?.expect("game");
+            assert_eq!((g.vision_state.as_deref(), g.vision_report_id), (Some("reviewed"), Some(42)));
+            set_vision_state(c, a, "deleted")?;
+            assert_eq!(get(c, a)?.and_then(|g| g.vision_state), Some("deleted".into()));
             Ok(())
         })
         .expect("ok");

@@ -115,7 +115,7 @@ pub fn apply_pending(paths: &AppPaths) -> std::io::Result<Applied> {
         for f in [RESTORE_PENDING, BEFORE_RESTORE] {
             remove_if_exists(&paths.root.join(f))?;
         }
-        for dir in [&paths.ddragon_dir, &paths.logs_dir] {
+        for dir in [&paths.ddragon_dir, &paths.logs_dir, &paths.vision_dir] {
             if dir.exists() {
                 std::fs::remove_dir_all(dir)?;
             }
@@ -137,6 +137,11 @@ pub fn apply_pending(paths: &AppPaths) -> std::io::Result<Applied> {
             }
         }
         std::fs::rename(&restore, &db)?;
+        // Frame folders are named by live game ids of the old database.
+        if paths.vision_dir.exists() {
+            std::fs::remove_dir_all(&paths.vision_dir)?;
+        }
+        std::fs::create_dir_all(&paths.vision_dir)?;
         return Ok(Applied::Restored);
     }
     Ok(Applied::Nothing)
@@ -174,10 +179,13 @@ mod tests {
         drop(db);
 
         std::fs::write(paths.ddragon_dir.join("x.json"), b"{}").expect("write");
+        std::fs::create_dir_all(paths.vision_dir.join("1")).expect("mkdir");
+        std::fs::write(paths.vision_dir.join("1").join("00004000.jpg"), b"x").expect("write");
         stage_delete(&paths).expect("stage");
         assert_eq!(apply_pending(&paths).expect("apply"), Applied::Deleted);
         assert!(!paths.db_file.exists() && !paths.root.join(BEFORE_RESTORE).exists());
         assert!(paths.ddragon_dir.exists() && !paths.ddragon_dir.join("x.json").exists());
+        assert!(paths.vision_dir.exists() && !paths.vision_dir.join("1").exists(), "frames deleted too");
         assert_eq!(apply_pending(&paths).expect("again"), Applied::Nothing);
     }
 }

@@ -4,6 +4,8 @@ import { ChampionsContext } from "../lib/assets";
 import type {
   AiUsage,
   AppSettings,
+  DiskUsage,
+  VisionSettings,
   McpStatus,
   ProviderId,
   ProviderInfo,
@@ -49,6 +51,7 @@ export function Settings({ settings, status, onSave, onKeyChanged }: Props) {
       <RiotKey status={status} onChanged={onKeyChanged} />
       <AiSection settings={settings} save={save} />
       <LiveSection settings={settings} save={save} />
+      <VisionSection settings={settings} save={save} />
       <BenchmarkSection settings={settings} save={save} />
       <DesktopSection settings={settings} save={save} />
       <McpSection settings={settings} save={save} />
@@ -470,6 +473,225 @@ function BenchmarkSection({ settings, save }: { settings: AppSettings; save: Sav
         />
         <span className="muted small-text">Only the two newest patches are kept either way.</span>
       </div>
+    </section>
+  );
+}
+
+/** Approximate input tokens for one frame (Claude counts width × height / 750). */
+const frameTokens = (width: number) => Math.round((width * Math.round((width * 9) / 16)) / 750);
+
+function VisionSection({ settings, save }: { settings: AppSettings; save: Save }) {
+  const v = settings.vision;
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [model, setModel] = useState(v.model);
+  const [baseUrl, setBaseUrl] = useState(v.base_url ?? "");
+  const [models, setModels] = useState<string[]>([]);
+  const [usage, setUsage] = useState<DiskUsage | null>(null);
+  const [msg, setMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [prev, setPrev] = useState(v);
+  if (v !== prev) {
+    setPrev(v);
+    setModel(v.model);
+    setBaseUrl(v.base_url ?? "");
+  }
+  useEffect(() => {
+    api.aiProviders().then(setProviders, () => {});
+    api.visionDiskUsage().then(setUsage, () => {});
+  }, []);
+  const setVision = (patch: Partial<VisionSettings>) =>
+    save((s) => ({ ...s, vision: { ...s.vision, ...patch } }));
+  const info = providers.find((p) => p.id === v.provider);
+  const effectiveBase = baseUrl.trim() || null;
+  const run = async (f: () => Promise<string | void>, ok: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await f();
+      setMsg({ tone: "ok", text: r ? `${ok} ${r}` : ok });
+    } catch (e) {
+      setMsg({ tone: "error", text: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const perReview = v.max_frames * frameTokens(v.max_width);
+
+  return (
+    <section className="panel">
+      <h2>Vision review</h2>
+      <p className="muted">
+        Takes a screenshot of the League game window every few seconds while you play, and after the game
+        sends the ones around your deaths, objective fights and laning checkpoints to a vision model for a
+        review of what the screen showed (map, vision, positioning, waves). Nothing is analyzed or shown
+        during the game, per Riot's rules, and only the game window is captured (never other windows or
+        monitors). Screenshots stay on this PC until the review, then are deleted; unreviewed ones are deleted
+        after a day.
+      </p>
+      <Toggle
+        label="Take screenshots during Summoner's Rift games"
+        hint="Windows 11 is needed (to capture without a border on the game). In exclusive Fullscreen the frames can be black: use Borderless or Windowed in League's video settings."
+        checked={v.enabled}
+        onChange={(enabled) => setVision({ enabled })}
+      />
+      <Toggle
+        label="Review automatically after each game"
+        hint="Once the game is analyzed. Otherwise use Review screenshots on the match page."
+        checked={v.auto_review}
+        onChange={(auto_review) => setVision({ auto_review })}
+      />
+      <div className="field">
+        <label>Screenshot every</label>
+        <select value={v.interval_s} onChange={(e) => setVision({ interval_s: Number(e.target.value) })}>
+          {[3, 4, 5, 6, 8, 10].map((s) => (
+            <option key={s} value={s}>
+              {s} seconds{s === 4 ? " (recommended)" : ""}
+            </option>
+          ))}
+        </select>
+        <span className="muted small-text">
+          Each screenshot takes about 20-30 ms of one CPU core. If one takes long because your PC is busy, the
+          next ones wait twice as long. Your measured cost per game is on the Live page.
+        </span>
+      </div>
+      <div className="form-row">
+        <div className="field">
+          <label>Screenshot size</label>
+          <select value={v.max_width} onChange={(e) => setVision({ max_width: Number(e.target.value) })}>
+            <option value={960}>960 px wide (cheapest)</option>
+            <option value={1280}>1280 px wide (recommended)</option>
+            <option value={1600}>1600 px wide (sharpest minimap)</option>
+          </select>
+        </div>
+        <div className="field">
+          <label>Screenshots per review</label>
+          <select value={v.max_frames} onChange={(e) => setVision({ max_frames: Number(e.target.value) })}>
+            {[12, 18, 24, 36, 48].map((n) => (
+              <option key={n} value={n}>
+                up to {n}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <p className="muted small-text">
+        About {perReview.toLocaleString()} input tokens per review at most (images), plus the reply. Vision
+        reviews count toward the AI token cap.
+      </p>
+      <div className="field">
+        <label>Vision provider</label>
+        <select
+          value={v.provider}
+          onChange={(e) => {
+            const p = providers.find((x) => x.id === e.target.value);
+            setModels([]);
+            void setVision({
+              provider: e.target.value as ProviderId,
+              model: p?.default_model ?? "",
+              base_url: null,
+            });
+          }}
+        >
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+              {p.has_key ? "  ✓ key saved" : ""}
+            </option>
+          ))}
+        </select>
+        <span className="muted small-text">
+          Separate from the AI coach's choice. Keys are saved once per provider (in AI coach above) and
+          shared.
+          {info && !info.has_key && info.key_required && " No key is saved for this provider yet."}
+        </span>
+      </div>
+      <div className="field">
+        <label>Vision model</label>
+        <div className="form-row">
+          <input
+            className="grow"
+            list="vision-models"
+            placeholder={info?.default_model || "a model that accepts images"}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            onBlur={() => model !== v.model && setVision({ model: model.trim() })}
+          />
+          <datalist id="vision-models">
+            {models.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          <button
+            className="secondary"
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                const list = await api.listAiModels(v.provider, effectiveBase);
+                setModels(list);
+                return `${list.length} models available; pick one that accepts images.`;
+              }, "")
+            }
+          >
+            Load models
+          </button>
+        </div>
+      </div>
+      {v.provider === "open_ai_compatible" && (
+        <div className="field">
+          <label>Endpoint URL</label>
+          <input
+            placeholder={info?.default_base_url}
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            onBlur={() => effectiveBase !== (v.base_url ?? null) && setVision({ base_url: effectiveBase })}
+          />
+        </div>
+      )}
+      <div className="field">
+        <label>Max output tokens</label>
+        <input
+          type="number"
+          min={1000}
+          max={32000}
+          step={500}
+          value={v.max_tokens}
+          onChange={(e) => setVision({ max_tokens: Number(e.target.value) })}
+        />
+      </div>
+      <div className="form-row">
+        <button
+          className="secondary"
+          disabled={busy || !model.trim()}
+          onClick={() =>
+            run(() => api.testAi(v.provider, model.trim(), effectiveBase), "Connected. Model replied:")
+          }
+        >
+          Test connection
+        </button>
+        <span className="muted small-text grow">
+          {usage
+            ? usage.frames === 0
+              ? "No screenshots on disk."
+              : `${usage.frames} screenshots from ${usage.games} game${usage.games === 1 ? "" : "s"} on disk (${(usage.bytes / 1048576).toFixed(1)} MB), waiting for a review.`
+            : ""}
+        </span>
+        {usage && usage.frames > 0 && (
+          <button
+            className="secondary"
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                const n = await api.deleteVisionFrames();
+                setUsage(await api.visionDiskUsage());
+                return `${n} game${n === 1 ? "" : "s"}.`;
+              }, "Deleted the screenshots of")
+            }
+          >
+            Delete screenshots now
+          </button>
+        )}
+      </div>
+      {msg && <div className={`banner ${msg.tone === "error" ? "error" : "ok"}`}>{msg.text}</div>}
     </section>
   );
 }

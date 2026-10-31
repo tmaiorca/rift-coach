@@ -7,7 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-rc-metrics = { version = "0.1.0", path = "../metrics" }
+rc-metrics = { version = "0.2.0", path = "../metrics" }
 serde = { version = "1.0.229", features = ["derive"] }
 
 [lints]

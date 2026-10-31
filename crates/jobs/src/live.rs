@@ -15,7 +15,8 @@ use rc_metrics::ItemCatalog;
 use rc_riot::Platform;
 use rc_riot::dto::ActiveGameDto;
 use rc_store::live::NewLiveGame;
-use rc_store::settings::LiveSettings;
+use rc_store::settings::{LiveSettings, VisionSettings};
+use rc_vision::{CaptureConfig, CaptureStats, GameClock, Session};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
@@ -27,6 +28,10 @@ use crate::job::Job;
 const SNAPSHOT_EVERY_S: f64 = 15.0;
 const SETTINGS_EVERY: Duration = Duration::from_secs(15);
 const DISABLED_POLL: Duration = Duration::from_secs(5);
+/// How often to look for the game window when vision capture isn't running.
+const VISION_RETRY: Duration = Duration::from_secs(10);
+/// Vision review covers Summoner's Rift games only.
+const VISION_MODE: &str = "CLASSIC";
 /// Practice tool games never reach Match-V5.
 const UNPUBLISHED_MODES: [&str; 2] = ["PRACTICETOOL", "TUTORIAL"];
 /// A game seen again within this of a recorded start is the same game (the
@@ -73,7 +78,19 @@ pub struct LiveState {
     pub footprint: Option<Footprint>,
     /// The pre-game brief (built at the loading screen; static for the game).
     pub brief: Option<BriefState>,
+    /// Vision capture for this game, when on (the app's own status).
+    pub vision: Option<VisionLive>,
     pub updated_ms: i64,
+}
+
+/// Status of the screenshot capture (nothing about the game itself).
+#[derive(Debug, Clone, Serialize)]
+pub struct VisionLive {
+    pub running: bool,
+    pub frames: u32,
+    pub interval_s: f64,
+    pub avg_ms: f64,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -132,6 +149,8 @@ pub struct LiveGameView {
     pub budget_cpu_avg_pct: f64,
     pub budget_mem_mb: f64,
     pub within_budget: Option<bool>,
+    /// Vision capture of this game, when frames were taken.
+    pub vision: Option<CaptureStats>,
 }
 
 pub fn live_game_view(game: rc_store::live::LiveGame) -> LiveGameView {
@@ -158,6 +177,7 @@ pub fn live_game_view(game: rc_store::live::LiveGame) -> LiveGameView {
         footprint,
         budget_cpu_avg_pct: rc_live::footprint::BUDGET_CPU_AVG_PCT,
         budget_mem_mb: rc_live::footprint::BUDGET_MEM_MB,
+        vision: game.vision_json.as_deref().and_then(|j| serde_json::from_str(j).ok()),
         game,
     }
 }
@@ -172,6 +192,11 @@ struct Run {
     sampler: Option<Sampler>,
     last_sample: Option<Instant>,
     last_saved_s: Option<f64>,
+    clock: Arc<GameClock>,
+    /// Vision capture; the mutex is only held briefly (or by a blocking task
+    /// starting/stopping capture, which the poller never waits on).
+    vision: Option<Arc<std::sync::Mutex<Option<Session>>>>,
+    vision_tried: Option<Instant>,
 }
 
 struct Poller {
@@ -181,6 +206,7 @@ struct Poller {
     tracker: Tracker,
     run: Option<Run>,
     settings: LiveSettings,
+    vision: VisionSettings,
     settings_at: Option<Instant>,
     tx: watch::Sender<LiveState>,
     brief: Option<BriefState>,
@@ -206,6 +232,7 @@ pub fn spawn_live(engine: Arc<Engine>, config: LiveConfig) -> Result<LiveHandle,
         tracker: Tracker::default(),
         run: None,
         settings: LiveSettings::default(),
+        vision: VisionSettings::default(),
         settings_at: None,
         tx,
     };
@@ -277,7 +304,10 @@ impl Poller {
             return;
         }
         match self.engine.db.call(|c| rc_store::settings::app(c)).await {
-            Ok(s) => self.settings = s.live,
+            Ok(s) => {
+                self.settings = s.live;
+                self.vision = s.vision;
+            }
             Err(e) => tracing::warn!(error = %e, "live poller could not read settings"),
         }
         self.settings_at = Some(Instant::now());
@@ -419,6 +449,8 @@ impl Poller {
                 }))
             })
             .await?;
+        let clock = Arc::new(GameClock::default());
+        let vision = self.new_vision(live_game_id, account_id, &s.game_mode, &clock);
         self.run = Some(Run {
             live_game_id,
             account_id,
@@ -429,8 +461,72 @@ impl Poller {
             sampler: Sampler::new(),
             last_sample: None,
             last_saved_s: None,
+            clock,
+            vision,
+            vision_tried: None,
         });
         Ok(())
+    }
+
+    /// A capture session for a tracked Summoner's Rift game, when vision
+    /// review is on. Capture itself starts in [`Self::vision_upkeep`].
+    fn new_vision(
+        &self,
+        live_game_id: i64,
+        account_id: Option<i64>,
+        mode: &str,
+        clock: &Arc<GameClock>,
+    ) -> Option<Arc<std::sync::Mutex<Option<Session>>>> {
+        let store = self.engine.frame_store()?;
+        if !self.vision.enabled || account_id.is_none() || mode != VISION_MODE {
+            return None;
+        }
+        let session = Session::new(CaptureConfig {
+            live_game_id,
+            interval: Duration::from_secs(u64::from(self.vision.interval_s.clamp(3, 10))),
+            max_width: self.vision.max_width.clamp(640, 1920),
+            store: store.clone(),
+            clock: clock.clone(),
+            window: std::env::var(rc_vision::WINDOW_ENV).ok(),
+        });
+        tracing::info!(live_game_id, interval_s = self.vision.interval_s, "vision capture armed");
+        Some(Arc::new(std::sync::Mutex::new(Some(session))))
+    }
+
+    /// Starts capture when the game window appears (and again if it is
+    /// re-created); stops it if vision review is turned off mid-game.
+    fn vision_upkeep(&mut self) {
+        let enabled = self.vision.enabled;
+        let Some(run) = &mut self.run else { return };
+        let Some(v) = run.vision.clone() else { return };
+        if !enabled {
+            run.vision = None;
+            tokio::task::spawn_blocking(move || {
+                if let Some(s) = v.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+                    let id = s.live_game_id();
+                    s.stop();
+                    tracing::info!(live_game_id = id, "vision capture turned off");
+                }
+            });
+            return;
+        }
+        let running = match v.try_lock() {
+            Ok(g) => g.as_ref().is_none_or(Session::running),
+            Err(_) => true, // starting or stopping right now
+        };
+        if running || run.vision_tried.is_some_and(|t| t.elapsed() < VISION_RETRY) {
+            return;
+        }
+        run.vision_tried = Some(Instant::now());
+        tokio::task::spawn_blocking(move || {
+            let mut g = v.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(s) = g.as_mut() else { return };
+            match s.ensure_running() {
+                Ok(true) => tracing::info!(live_game_id = s.live_game_id(), "vision capture started"),
+                Ok(false) => {}
+                Err(e) => tracing::debug!(error = %e, "vision capture not started yet"),
+            }
+        });
     }
 
     async fn champion_key(&self, patch: &str, ddragon_id: &str) -> Option<i32> {
@@ -443,6 +539,10 @@ impl Poller {
     /// Per poll in game: derived numbers, snapshots, footprint.
     async fn tick(&mut self) {
         let Some(s) = self.tracker.last().cloned() else { return };
+        if let Some(run) = &self.run {
+            run.clock.set(s.game_time_s);
+        }
+        self.vision_upkeep();
         let Some(run) = &mut self.run else { return };
         run.marks.update(&s);
         if run.last_sample.is_none_or(|t| t.elapsed() >= self.config.footprint_every) {
@@ -463,6 +563,10 @@ impl Poller {
     }
 
     async fn end(&mut self, reason: EndReason, last: &OwnSnapshot) -> Result<(), rc_store::StoreError> {
+        let vision = self.run.as_mut().and_then(|r| Some((r.live_game_id, r.vision.take()?)));
+        if let Some((id, v)) = vision {
+            self.finish_vision(id, v).await;
+        }
         let Some(run) = &self.run else { return Ok(()) };
         let id = run.live_game_id;
         let final_json = serde_json::to_string(last)?;
@@ -491,6 +595,29 @@ impl Poller {
             self.engine.enqueue_at(vec![Job::PostGame { account_id, live_game_id: id }], now_ms() + delay).await?;
         }
         Ok(())
+    }
+
+    /// Stops capture and records its stats; a game without frames keeps none.
+    async fn finish_vision(&self, live_game_id: i64, v: Arc<std::sync::Mutex<Option<Session>>>) {
+        let stats: Option<CaptureStats> = tokio::task::spawn_blocking(move || {
+            v.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take().map(Session::stop)
+        })
+        .await
+        .ok()
+        .flatten();
+        let Some(stats) = stats else { return };
+        tracing::info!(live_game_id, ?stats, "vision capture finished");
+        if stats.frames == 0 {
+            if let Some(store) = self.engine.frame_store() {
+                let _ = store.delete(live_game_id);
+            }
+            return;
+        }
+        let Ok(json) = serde_json::to_string(&stats) else { return };
+        if let Err(e) = self.engine.db.call(move |c| rc_store::live::set_vision_captured(c, live_game_id, &json)).await
+        {
+            tracing::warn!(error = %e, "could not record vision capture");
+        }
     }
 
     async fn start_brief(&mut self, allow_plan: bool) {
@@ -615,6 +742,18 @@ impl Poller {
             state.goals = view::goals_live(&run.context.goals, s, &run.marks);
             state.footprint = (run.footprint.samples > 0).then(|| run.footprint.clone());
             state.context = Some(run.context.clone());
+            state.vision = run.vision.as_ref().and_then(|v| {
+                let g = v.try_lock().ok()?;
+                let s = g.as_ref()?;
+                let st = s.stats();
+                Some(VisionLive {
+                    running: s.running(),
+                    frames: st.frames,
+                    interval_s: st.interval_s,
+                    avg_ms: st.avg_ms,
+                    error: st.error,
+                })
+            });
         }
         state.snapshot = snapshot;
         self.tx.send_replace(state);

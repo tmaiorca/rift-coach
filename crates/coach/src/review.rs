@@ -289,7 +289,7 @@ pub async fn usage(db: &Db) -> Result<(i64, i64), CoachError> {
     Ok(db.call(move |c| reports::usage_since(c, since)).await?)
 }
 
-async fn check_budget(db: &Db, limit: Option<u64>) -> Result<(), CoachError> {
+pub(crate) async fn check_budget(db: &Db, limit: Option<u64>) -> Result<(), CoachError> {
     let Some(limit) = limit else { return Ok(()) };
     let (_, used) = usage(db).await?;
     if u64::try_from(used).unwrap_or(0) >= limit {
@@ -318,8 +318,13 @@ async fn generate(db: &Db, ai: &AiClient, spec: Spec, opts: &ReviewOptions) -> R
     check_budget(db, opts.monthly_token_limit).await?;
     let facts_text = serde_json::to_string_pretty(&spec.facts).map_err(|e| CoachError::Invalid(e.to_string()))?;
     let user = format!("{}\n{facts_text}", spec.intro);
-    let mut request =
-        CompletionRequest { system: spec.prompt.to_owned(), user, max_tokens: opts.max_tokens, json: true };
+    let mut request = CompletionRequest {
+        system: spec.prompt.to_owned(),
+        user,
+        max_tokens: opts.max_tokens,
+        json: true,
+        images: vec![],
+    };
 
     let (mut tokens_in, mut tokens_out) = (0i64, 0i64);
     let mut last: Option<(Value, crate::validate::Validation)> = None;

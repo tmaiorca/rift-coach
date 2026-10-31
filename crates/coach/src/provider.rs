@@ -3,7 +3,7 @@
 
 use rc_ai::{AiClient, ProviderConfig, ProviderKind};
 use rc_common::credentials;
-use rc_store::settings::AiSettings;
+use rc_store::settings::{AiSettings, VisionSettings};
 
 use crate::CoachError;
 
@@ -18,4 +18,15 @@ pub fn client_from_settings(s: &AiSettings) -> Result<AiClient, CoachError> {
     let key =
         credentials::load_secret(&config.kind.credential_name()).map_err(|e| CoachError::Invalid(e.to_string()))?;
     Ok(AiClient::new(config, key)?)
+}
+
+/// The vision review's client: its own provider and model, the provider's
+/// key from Credential Manager (shared with text reviews).
+pub fn vision_client(s: &VisionSettings) -> Result<AiClient, CoachError> {
+    client_from_settings(&AiSettings {
+        provider: s.provider.clone(),
+        model: s.model.clone(),
+        base_url: s.base_url.clone(),
+        ..AiSettings::default()
+    })
 }

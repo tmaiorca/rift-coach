@@ -118,6 +118,10 @@ pub enum EngineEvent {
         scope: String,
         report_id: i64,
     },
+    VisionReviewReady {
+        match_id: String,
+        report_id: i64,
+    },
     /// A game seen live was found in Match-V5.
     LiveGameLinked {
         live_game_id: i64,
@@ -165,6 +169,7 @@ impl EngineEvent {
             Self::KeyGenerationChanged { .. } => ("warn", "Riot API key changed; re-resolving accounts".into()),
             Self::ReviewReady { match_id, .. } => ("info", format!("AI review ready for {match_id}")),
             Self::SessionReviewReady { .. } => ("info", "AI session review ready".into()),
+            Self::VisionReviewReady { match_id, .. } => ("info", format!("Vision review ready for {match_id}")),
             Self::LiveGameLinked { match_id, .. } => ("info", format!("Found your last game: {match_id}")),
             Self::PostGameReady { match_id, .. } => ("info", format!("Your last game is analyzed ({match_id})")),
             Self::InGameChanged { in_game: true } => ("info", "Game detected: background work paused".into()),
@@ -204,6 +209,7 @@ pub struct Engine {
     paused: AtomicBool,
     in_game: AtomicBool,
     items: Mutex<HashMap<String, Arc<ItemCatalog>>>,
+    frames: std::sync::OnceLock<rc_vision::FrameStore>,
 }
 
 impl Engine {
@@ -220,7 +226,17 @@ impl Engine {
             paused: AtomicBool::new(false),
             in_game: AtomicBool::new(false),
             items: Mutex::new(HashMap::new()),
+            frames: std::sync::OnceLock::new(),
         })
+    }
+
+    /// Where vision review frames go. Without one, vision capture is off.
+    pub fn set_frame_store(&self, store: rc_vision::FrameStore) {
+        let _ = self.frames.set(store);
+    }
+
+    pub fn frame_store(&self) -> Option<&rc_vision::FrameStore> {
+        self.frames.get()
     }
 
     pub fn db(&self) -> &Db {
@@ -275,6 +291,7 @@ impl Engine {
         if pruned > 0 {
             tracing::info!(games = pruned, "pruned live snapshots");
         }
+        self.sweep_vision_frames().await?;
         let stale = self.db.call(|c| rc_store::metrics::stale_matches(c, rc_metrics::METRICS_VERSION)).await?;
         if !stale.is_empty() {
             tracing::info!(matches = stale.len(), "queueing metrics computation");
@@ -314,6 +331,9 @@ impl Engine {
                 }
                 if let Err(e) = checker.refresh_stale_ranks().await {
                     tracing::warn!(error = ?e, "rank refresh check failed");
+                }
+                if let Err(e) = checker.sweep_vision_frames().await {
+                    tracing::warn!(error = ?e, "vision frame cleanup failed");
                 }
             }
         });

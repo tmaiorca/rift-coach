@@ -371,6 +371,76 @@ async fn ingests_recorded_fixtures() {
     assert_eq!(again.id, report.id);
     assert_eq!(ai.received_requests().await.unwrap_or_default().len(), 2);
 
+    // Vision review: frames every 4 s of the game, a mock vision model that
+    // copies another player's name from a "screenshot".
+    let raw =
+        db.with(|c| rc_store::matches::get_raw(c, target, rc_store::matches::RawKind::Match)).expect("q").expect("raw");
+    let game: Value = serde_json::from_slice(&raw).expect("json");
+    let other = game["info"]["participants"]
+        .as_array()
+        .expect("participants")
+        .iter()
+        .find(|p| p["riotIdGameName"] != "TapRooted")
+        .expect("another player");
+    let (other_name, other_champ) =
+        (other["riotIdGameName"].as_str().expect("name").to_owned(), other["championName"].as_str().expect("c"));
+    let store = rc_vision::FrameStore::new(tmp.path().join("vision"));
+    let duration_ms = game["info"]["gameDuration"].as_i64().expect("duration") * 1000;
+    for t in (0..duration_ms).step_by(4000) {
+        store.write(9, t, b"\xFF\xD8fake-jpeg").expect("frame");
+    }
+    let rc_coach::vision::Prepared { facts, moments, .. } =
+        db.with(|c| Ok(rc_coach::vision::prepare(c, me, target, &store.list(9), 18))).expect("q").expect("prepare");
+    let sent: usize = moments.iter().map(|m| m.frames.len()).sum();
+    assert!(sent > 0 && sent <= 18, "{sent}");
+    assert!(moments.iter().any(|m| m.anchor.id == "death_1"), "deaths come first");
+    assert!(moments.windows(2).all(|w| w[0].anchor.t_ms <= w[1].anchor.t_ms), "in game order");
+    assert!(facts["moments"][0]["frames"].as_array().is_some_and(|f| !f.is_empty()));
+    let vision_reply = json!({
+        "summary": format!("{other_name} kept finding you without vision."),
+        "moments": [{
+            "id": "death_1",
+            "title": "River facecheck",
+            "seen": format!("Three enemies were missing and {other_name} was in the river brush."),
+            "lesson": "Ward the river before walking in.",
+            "category": "map_awareness",
+            "severity": "high",
+            "clear": true
+        }],
+        "themes": [{"title": "Walking into fog", "detail": "Missing enemies weren't respected.", "moments": ["death_1"]}],
+        "next_game_focus": {"goal": "Ward before entering the river", "how": "Buy a control ward each back."},
+        "confidence": "medium",
+        "confidence_reason": "The frames are clear."
+    });
+    let vai = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "content": [{"type": "text", "text": vision_reply.to_string()}],
+            "usage": {"input_tokens": 30000, "output_tokens": 800}
+        })))
+        .mount(&vai)
+        .await;
+    let vclient = rc_ai::AiClient::new(
+        rc_ai::ProviderConfig { kind: rc_ai::ProviderKind::Anthropic, model: "v".into(), base_url: Some(vai.uri()) },
+        Some(Secret::new("sk-test")),
+    )
+    .expect("ai");
+    let vopts = rc_coach::vision::VisionOptions { max_frames: 18, max_tokens: 4000, monthly_token_limit: None };
+    let vr = rc_coach::vision::vision_review(&db, &vclient, &store, me, target, 9, &vopts).await.expect("vision");
+    assert_eq!(vr.kind, "vision");
+    assert_eq!(vr.match_id.as_deref(), Some(target.as_str()));
+    let text = vr.output.to_string();
+    assert!(!text.contains(&other_name), "other players' names are scrubbed: {text}");
+    assert!(text.contains(other_champ), "replaced by their champion");
+    let req = &vai.received_requests().await.unwrap_or_default()[0];
+    let body: Value = serde_json::from_slice(&req.body).expect("body");
+    let parts = body["messages"][0]["content"].as_array().expect("content parts");
+    assert_eq!(parts.iter().filter(|p| p["type"] == "image").count(), sent);
+    assert!(parts.iter().any(|p| p["text"].as_str().is_some_and(|t| t.starts_with("Moment death_1 (death at"))));
+    let body_text = String::from_utf8_lossy(&req.body);
+    assert!(!body_text.contains("Player0") && !body_text.contains("FIXTURE-PUUID"), "no identities sent");
+
     // Death events are stored for every death of every player.
     let (summary, pid) = db.with(|c| Ok(rc_store::matches::account_match(c, me, target)?.expect("row"))).expect("q");
     let deaths = db.with(|c| rc_store::metrics::participant_deaths(c, target, pid)).expect("q");

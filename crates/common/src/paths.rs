@@ -11,6 +11,8 @@ pub struct AppPaths {
     pub db_file: PathBuf,
     pub logs_dir: PathBuf,
     pub ddragon_dir: PathBuf,
+    /// Vision review frames, one folder per live game; deleted after review.
+    pub vision_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -31,9 +33,10 @@ impl AppPaths {
             db_file: root.join("rift-coach.db"),
             logs_dir: root.join("logs"),
             ddragon_dir: root.join("cache").join("ddragon"),
+            vision_dir: root.join("vision"),
             root,
         };
-        for dir in [&paths.root, &paths.logs_dir, &paths.ddragon_dir] {
+        for dir in [&paths.root, &paths.logs_dir, &paths.ddragon_dir, &paths.vision_dir] {
             std::fs::create_dir_all(dir)?;
         }
         Ok(paths)

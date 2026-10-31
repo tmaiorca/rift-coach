@@ -9,16 +9,17 @@ publish.workspace = true
 base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 getrandom = "0.3"
-rc-ai = { version = "0.1.0", path = "../crates/ai" }
-rc-coach = { version = "0.1.0", path = "../crates/coach" }
-rc-common = { version = "0.1.0", path = "../crates/common" }
-rc-ddragon = { version = "0.1.0", path = "../crates/ddragon" }
-rc-jobs = { version = "0.1.0", path = "../crates/jobs" }
-rc-live = { version = "0.1.0", path = "../crates/live" }
-rc-mcp = { version = "0.1.0", path = "../crates/mcp" }
-rc-metrics = { version = "0.1.0", path = "../crates/metrics" }
-rc-riot = { version = "0.1.0", path = "../crates/riot" }
-rc-store = { version = "0.1.0", path = "../crates/store" }
+rc-ai = { version = "0.2.0", path = "../crates/ai" }
+rc-coach = { version = "0.2.0", path = "../crates/coach" }
+rc-common = { version = "0.2.0", path = "../crates/common" }
+rc-ddragon = { version = "0.2.0", path = "../crates/ddragon" }
+rc-jobs = { version = "0.2.0", path = "../crates/jobs" }
+rc-live = { version = "0.2.0", path = "../crates/live" }
+rc-vision = { version = "0.2.0", path = "../crates/vision" }
+rc-mcp = { version = "0.2.0", path = "../crates/mcp" }
+rc-metrics = { version = "0.2.0", path = "../crates/metrics" }
+rc-riot = { version = "0.2.0", path = "../crates/riot" }
+rc-store = { version = "0.2.0", path = "../crates/store" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tauri = { version = "2.12.4", features = ["tray-icon"] }

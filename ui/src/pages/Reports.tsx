@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { dateTime } from "../lib/format";
-import type { GamePlan, Report } from "../types";
+import { momentLabel } from "../components/VisionPanel";
+import type { GamePlan, Report, VisionReviewOutput } from "../types";
 
 function PlanItems({ output }: { output: GamePlan }) {
   return (
@@ -25,6 +26,7 @@ const KIND: Record<string, string> = {
   session: "session",
   weekly: "week",
   pregame: "game plan",
+  vision: "screenshots",
 };
 
 export function Reports({
@@ -113,6 +115,19 @@ export function Reports({
                 </button>
               )}
               {r.kind === "pregame" && <PlanItems output={r.output as unknown as GamePlan} />}
+              {r.kind === "vision" && (
+                <ul>
+                  {(r.output as unknown as VisionReviewOutput).moments?.map((m) => (
+                    <li key={m.id}>
+                      <b>
+                        {m.time ? `${m.time} ` : ""}
+                        {m.title}
+                      </b>{" "}
+                      <span className="muted small-text">({momentLabel(m.id)})</span>: {m.lesson}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </details>
         ))}

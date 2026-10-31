@@ -51,6 +51,7 @@ pub struct AppSettings {
     pub benchmarks: BenchmarkSettings,
     pub desktop: DesktopSettings,
     pub mcp: McpSettings,
+    pub vision: VisionSettings,
 }
 
 impl Default for AppSettings {
@@ -67,6 +68,7 @@ impl Default for AppSettings {
             benchmarks: BenchmarkSettings::default(),
             desktop: DesktopSettings::default(),
             mcp: McpSettings::default(),
+            vision: VisionSettings::default(),
         }
     }
 }
@@ -132,6 +134,49 @@ impl Default for McpSettings {
         Self { enabled: false, port: 7337, lan: false, require_token_local: false }
     }
 }
+
+/// Vision review: screenshots of your game window during a game, reviewed
+/// by a vision model only after the game (never during it). Frames are
+/// deleted once reviewed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VisionSettings {
+    /// Capture the game window during Summoner's Rift games.
+    pub enabled: bool,
+    /// Seconds between screenshots (slows down by itself if the PC is busy).
+    pub interval_s: u32,
+    /// Longest edge of a stored frame in pixels (960, 1280 or 1600).
+    pub max_width: u32,
+    /// Most frames sent to the AI per game.
+    pub max_frames: u32,
+    /// Review automatically once the game is analyzed.
+    pub auto_review: bool,
+    /// Separate provider/model from the text reviews (keys are shared per
+    /// provider in Credential Manager).
+    pub provider: String,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub max_tokens: u32,
+}
+
+impl Default for VisionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_s: 4,
+            max_width: 1280,
+            max_frames: 24,
+            auto_review: true,
+            provider: "anthropic".into(),
+            model: "claude-sonnet-5-5".into(),
+            base_url: None,
+            max_tokens: 6000,
+        }
+    }
+}
+
+pub const VISION_INTERVALS: [u32; 6] = [3, 4, 5, 6, 8, 10];
+pub const VISION_WIDTHS: [u32; 3] = [960, 1280, 1600];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -236,6 +281,8 @@ mod tests {
             assert_eq!(s.benchmarks.tier, "AUTO");
             assert!(s.benchmarks.enabled && !s.ai.auto_weekly && !s.ai.auto_pregame);
             assert!(s.desktop.close_to_tray && !s.desktop.onboarded && !s.mcp.enabled && !s.mcp.lan);
+            assert!(!s.vision.enabled && s.vision.auto_review);
+            assert_eq!((s.vision.interval_s, s.vision.max_width, s.vision.max_frames), (4, 1280, 24));
             Ok(())
         })
         .expect("ok");

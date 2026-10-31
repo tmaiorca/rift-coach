@@ -299,6 +299,7 @@ function Footprints({ games }: { games: LiveGameView[] }) {
               <th>CPU peak</th>
               <th>Memory peak</th>
               <th>Backend only</th>
+              <th>Screenshots</th>
               <th />
             </tr>
           </thead>
@@ -316,6 +317,11 @@ function Footprints({ games }: { games: LiveGameView[] }) {
                   <td className="mono">{Math.round(f.mem_max_mb)} MB</td>
                   <td className="mono muted">
                     {f.backend_cpu_avg_pct.toFixed(2)}% · {Math.round(f.backend_mem_max_mb)} MB
+                  </td>
+                  <td className="mono muted" title={g.vision?.error ?? undefined}>
+                    {g.vision
+                      ? `${g.vision.frames} · ${g.vision.avg_ms.toFixed(0)} ms each${g.vision.slowed > 0 ? ` · ${g.vision.slowed} slowed` : ""}`
+                      : "off"}
                   </td>
                   <td>
                     <span className={`tag ${g.within_budget ? "ok" : "bad"}`}>

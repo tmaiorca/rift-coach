@@ -42,12 +42,13 @@ pub enum StoreError {
 pub type Result<T> = std::result::Result<T, StoreError>;
 
 /// Schema migrations in order; a database's `user_version` is how many ran.
-const MIGRATIONS: [&str; 5] = [
+const MIGRATIONS: [&str; 6] = [
     include_str!("../migrations/001_init.sql"),
     include_str!("../migrations/002_metrics_ai_activity.sql"),
     include_str!("../migrations/003_signals_goals_sessions.sql"),
     include_str!("../migrations/004_live.sql"),
     include_str!("../migrations/005_benchmarks_ranks_briefs.sql"),
+    include_str!("../migrations/006_vision.sql"),
 ];
 
 fn migrations() -> Migrations<'static> {

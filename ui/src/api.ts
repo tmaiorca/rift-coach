@@ -22,6 +22,8 @@ import type {
   BuildPlanView,
   McpStatus,
   UpdateInfo,
+  DiskUsage,
+  VisionView,
   ChampionDetail,
   ChampionSummary,
   PlannerItem,
@@ -129,6 +131,10 @@ export const api = {
   deleteAllData: (forgetKeys: boolean) => invoke<void>("delete_all_data", { forgetKeys }),
   openDataFolder: () => invoke<void>("open_data_folder"),
   checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
+  visionStatus: (matchId: string) => invoke<VisionView>("vision_status", { matchId }),
+  generateVisionReview: (matchId: string) => invoke<Report>("generate_vision_review", { matchId }),
+  visionDiskUsage: () => invoke<DiskUsage>("vision_disk_usage"),
+  deleteVisionFrames: () => invoke<number>("delete_vision_frames"),
   installUpdate: () => invoke<void>("install_update"),
 };
 

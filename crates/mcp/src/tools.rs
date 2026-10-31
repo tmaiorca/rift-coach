@@ -96,10 +96,10 @@ pub fn definitions() -> Value {
         tool(
             "list_reports",
             "AI reports",
-            "AI coaching reports (post-game, session, weekly, game plan), newest first, without their full text.",
+            "AI coaching reports (post-game, session, weekly, game plan, vision review of screenshots), newest first,              without their full text.",
             json!({
                 "riot_id": account,
-                "kind": {"type": "string", "enum": ["post_game", "session", "weekly", "pregame"]},
+                "kind": {"type": "string", "enum": ["post_game", "session", "weekly", "pregame", "vision"]},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Default 20."},
             }),
             &[]

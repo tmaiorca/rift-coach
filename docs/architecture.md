@@ -24,7 +24,8 @@ live poller (rc-jobs::live) --> LiveClient (rc-live) --> https://127.0.0.1:2999 
       |-- Engine::set_in_game  (holds the queue while playing)
       |-- rc-live::view (pure): pacing, build progress, goal values  --> watch channel --> UI
       |-- footprint Sampler (sysinfo): this process + WebView2 children
-      '-- on end: live_games row, Job::PostGame
+      |-- vision Session (rc-vision, optional): game window --> vision/<id>/<ms>.jpg (no analysis)
+      '-- on end: live_games row, Job::PostGame (--> Job::VisionReview once analyzed)
 ```
 
 `rc-cli` builds the identical engine (`rc_jobs::build_engine`) for headless use.
@@ -170,6 +171,61 @@ timeline are computed for a linked game, the engine emits `PostGameReady`
 (once, via `analyzed_at`) and prunes snapshots past the retention setting.
 The app shows a Windows notification for that, or for `ReviewReady` of a
 linked game.
+
+## Vision review
+
+`rc-vision` captures; `rc-coach::vision` reviews. The split is the Riot line:
+during a game frames are only written to disk, and nothing reads them until
+the game is over.
+
+**Capture.** On `Started`, for a tracked account in a `CLASSIC` game with
+`vision.enabled`, the poller creates a `rc_vision::Session` for the live game
+and, from `tick`, starts Windows Graphics Capture (`windows-capture` crate) on
+the window titled `League of Legends (TM) Client` (retried every 10 s until it
+exists, and again if it's re-created). Settings: no cursor, no capture border
+(Windows 11; capture is refused rather than drawing one), at most one
+delivered frame per 500 ms where Windows supports it, BGRA. Frames arrive on
+the capture thread; `Shared::due` drops all but one per interval before any
+GPU copy. A due frame is copied to a staging texture, area-averaged down to
+`max_width` (`encode::downscale`, plain Rust, one thread, row padding
+handled), JPEG-encoded (`jpeg-encoder`, quality 82) and written atomically to
+`vision/<live_game_id>/<game ms>.jpg`. Game time comes from `GameClock`,
+which the poller sets on each Live Client poll and the capture thread
+extrapolates (stale after 12 s: paused games get no frames). A frame slower
+than 120 ms doubles the interval for the next 5; black frames (exclusive
+fullscreen) are counted, not stored; a game stops at 400 MB. Windows only
+delivers frames when the window redraws, which a game always does. On
+`Ended` the session stops on a blocking thread and its `CaptureStats` go to
+`live_games.vision_json` (`vision_state = 'captured'`); `LiveState.vision`
+carries the app's own capture status for the live view.
+
+**Review.** When a linked game is analyzed (`PostGameReady`), and
+`vision.auto_review` is on, `Job::VisionReview` is queued (held during games
+like every job). `vision::anchors` turns the timeline into moments: each
+death of the player (priority 0 before 14:00 or when the enemy took an
+objective within 60 s, else 1), objective kills (same type within 90 s is one
+fight), and checkpoints at 5/10/14 minutes. `rc_vision::select` picks frames
+within 3.5 s of fixed offsets (deaths: -6, -15, -1 s and never after the
+death; objectives: -10, -25, 0 s; checkpoints: 0), deaths first with
+`min(3, budget·2/3 / deaths)` frames each, then objectives and checkpoints
+not within 20 s of a picked moment. The facts (champion, side, result, each
+moment's time, frame times and timeline context) go as text, then each frame
+after a caption, in one request (`CompletionRequest.images`: Anthropic image
+blocks, OpenAI `image_url` data URLs with `detail: high`, Gemini
+`inline_data`). `validate_vision` checks the shape and moment ids (one retry
+with feedback), fills in defaults for category/severity, then each moment
+gets its time and kind from the facts, and every other participant's Riot ID
+game name in the reply is replaced by their champion (`scrub_names`). The
+report is stored as `ai_reports.kind = 'vision'` with `match_id`; its
+`input_json` holds the facts and the count of frames, never images. The frames
+folder is deleted once the report is stored. `sweep_vision_frames` (on start
+and every 10 minutes) deletes folders of reviewed games, games that no longer
+exist, and any older than a day after the game; restore and delete-all clear
+the folder.
+
+The vision provider/model are separate settings (`settings.vision`) that use
+the same per-provider Credential Manager keys (`provider::vision_client`), and
+reviews count toward the monthly token cap.
 
 ## Metrics and comparisons
 

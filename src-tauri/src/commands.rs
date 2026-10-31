@@ -497,6 +497,7 @@ pub async fn test_ai(provider: String, model: String, base_url: Option<String>) 
         user: "Reply with the single word OK.".into(),
         max_tokens: 200,
         json: false,
+        images: vec![],
     };
     let c = client.complete(&req).await.map_err(err)?;
     Ok(c.text.chars().take(80).collect())
@@ -542,6 +543,19 @@ pub async fn save_settings(state: State<'_, AppState>, new: AppSettings) -> CmdR
         return Err("Live snapshots can be kept for at most 365 days.".into());
     }
     new.ai.provider.parse::<ProviderKind>()?;
+    new.vision.provider.parse::<ProviderKind>()?;
+    if !settings::VISION_INTERVALS.contains(&new.vision.interval_s) {
+        return Err("The screenshot interval must be 3, 4, 5, 6, 8 or 10 seconds.".into());
+    }
+    if !settings::VISION_WIDTHS.contains(&new.vision.max_width) {
+        return Err("Screenshot size must be 960, 1280 or 1600 pixels wide.".into());
+    }
+    if !(6..=60).contains(&new.vision.max_frames) {
+        return Err("Send between 6 and 60 screenshots per game.".into());
+    }
+    if !(1000..=32_000).contains(&new.vision.max_tokens) {
+        return Err("Max vision output tokens must be between 1000 and 32000.".into());
+    }
     if new.mcp.port < 1024 {
         return Err("Use an MCP port of 1024 or higher.".into());
     }

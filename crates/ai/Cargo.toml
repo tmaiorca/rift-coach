@@ -7,7 +7,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-rc-common = { version = "0.1.0", path = "../common" }
+base64 = "0.22.1"
+rc-common = { version = "0.2.0", path = "../common" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
