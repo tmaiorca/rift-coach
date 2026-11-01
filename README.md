@@ -490,8 +490,9 @@ taken.
   or an OpenAI-compatible server with a vision model). Keys are shared: one per
   provider, saved in AI coach. At 1280 px a screenshot is roughly 1,200 input
   tokens with Claude (similar elsewhere), so a 24-screenshot review is about
-  30,000 tokens in plus 1,000–2,000 out. Vision reviews count toward the
-  token cap. 960 px is cheaper; 1600 px makes the minimap sharper.
+  30,000 tokens in plus about 8,000 out with Claude Sonnet 5.5, most of it the
+  model thinking about the screenshots before it writes (about a minute).
+  Vision reviews count toward the token cap. 960 px is cheaper; 1600 px makes the minimap sharper.
 - **Fullscreen.** In exclusive Fullscreen, Windows can only hand back black
   frames; they're skipped and the Live page says to switch League to
   **Borderless** (or Windowed) in its video settings. Windows 11 is needed (to
@@ -546,7 +547,7 @@ are refused, so a website you visit can't read your data through it.
 |---|---|
 | Riot API key | Save, replace or remove the key in Windows Credential Manager; reload after changing the environment variable |
 | AI provider, key, model, endpoint | Which AI to use. **Load models** lists the models your key can use; **Test connection** sends a one-word prompt |
-| Max output tokens | Upper bound per review (default 4000) |
+| Max output tokens | Upper bound for the written review (default 4000). Models that think first (Claude, OpenAI reasoning models, Gemini) get up to 16,000 more tokens to think; you're billed only for what they use |
 | Automatically write a weekly report | After each week with 3+ Summoner's Rift games (default off) |
 | Write an AI game plan at the loading screen | One short static plan per game (default off) |
 | Collect higher-rank games | Background benchmark collection (default on) |
@@ -565,7 +566,7 @@ are refused, so a website you visit can't read your data through it.
 | Screenshot every | 3, 4 (default), 5, 6, 8 or 10 seconds |
 | Screenshot size | 960, 1280 (default) or 1600 px wide |
 | Screenshots per review | Up to 12, 18, 24 (default), 36 or 48 sent per game |
-| Vision provider, model, endpoint, max output tokens | The vision model, separate from the AI coach (keys are shared per provider); default 6000 output tokens |
+| Vision provider, model, endpoint, max output tokens | The vision model, separate from the AI coach (keys are shared per provider); default 6000 output tokens for the review, plus room to think as above |
 | Delete screenshots now | Removes every stored screenshot (shown with how much space they use) |
 | Token cap (last 30 days) | Stop generating reviews once this many tokens were used in the last 30 days; shows your usage. Empty = no cap |
 | Look-back window | How many of your recent games feed baselines, patterns, the dashboard and trends (default 30) |
@@ -658,6 +659,7 @@ gameplay", reveal hidden information, or automate input. So Rift Coach:
 | Vision review: "frames are black" | League is in exclusive Fullscreen: Video settings → Window mode → **Borderless** |
 | Vision review: "can't hide the capture border" | Screenshots need Windows 11 |
 | Vision review: no screenshots taken | Check Settings → Vision review is on, the game was Summoner's Rift on a tracked account, and the Live page showed screenshots being taken |
+| A review fails with "empty completion (stop_reason max_tokens, blocks [thinking] ...)" | The model used its whole output limit thinking. Fixed in 0.2.1 (models get extra room to think); on 0.2.0, raise **Max output tokens** to 20000 |
 | Vision review failed | Settings → Vision review: check the provider has a saved key, pick a model that accepts images, **Test connection**, then **Review screenshots** on the match (within a day of the game) |
 
 ## For developers
@@ -676,6 +678,7 @@ cargo run -p rc-cli -- patterns --games 100 --sessions   # patterns, win links, 
 cargo run -p rc-cli -- mock-live --speed 10              # a scripted game for the live view
 cargo run -p rc-cli -- benchmarks [--collect 5]          # benchmark progress and gaps (collect for 5 min first)
 cargo run --release -p rc-cli -- vision-capture --window "Notepad"   # screenshot cost per frame, any window
+cargo run --release -p rc-cli -- vision-review [MATCH_ID]           # run a game's vision review now (real AI call)
 ```
 
 Vision capture looks for the window titled `League of Legends (TM) Client`. To

@@ -3527,7 +3527,7 @@ dependencies = [
 
 [[package]]
 name = "rc-ai"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "rc-common",
@@ -3542,7 +3542,7 @@ dependencies = [
 
 [[package]]
 name = "rc-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3564,7 +3564,7 @@ dependencies = [
 
 [[package]]
 name = "rc-coach"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "rc-ai",
@@ -3585,7 +3585,7 @@ dependencies = [
 
 [[package]]
 name = "rc-common"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dirs 7.0.0",
  "keyring-core",
@@ -3600,7 +3600,7 @@ dependencies = [
 
 [[package]]
 name = "rc-ddragon"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "rc-store",
@@ -3616,7 +3616,7 @@ dependencies = [
 
 [[package]]
 name = "rc-jobs"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "rc-ai",
  "rc-coach",
@@ -3638,7 +3638,7 @@ dependencies = [
 
 [[package]]
 name = "rc-live"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "rc-metrics",
  "reqwest",
@@ -3654,7 +3654,7 @@ dependencies = [
 
 [[package]]
 name = "rc-mcp"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "chrono",
@@ -3673,7 +3673,7 @@ dependencies = [
 
 [[package]]
 name = "rc-metrics"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3682,7 +3682,7 @@ dependencies = [
 
 [[package]]
 name = "rc-riot"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "rc-common",
@@ -3698,7 +3698,7 @@ dependencies = [
 
 [[package]]
 name = "rc-signals"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "rc-metrics",
  "serde",
@@ -3706,7 +3706,7 @@ dependencies = [
 
 [[package]]
 name = "rc-store"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "rc-common",
  "rusqlite",
@@ -3722,7 +3722,7 @@ dependencies = [
 
 [[package]]
 name = "rc-vision"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "jpeg-encoder",
  "serde",
@@ -3868,7 +3868,7 @@ dependencies = [
 
 [[package]]
 name = "rift-coach"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",

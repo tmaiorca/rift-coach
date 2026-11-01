@@ -145,6 +145,43 @@ enum Command {
         #[arg(long)]
         out: Option<std::path::PathBuf>,
     },
+    /// Run the vision review of a recorded game now, like the app's
+    /// "Review screenshots" (default: the newest game with screenshots).
+    VisionReview { match_id: Option<String> },
+}
+
+async fn vision_review(engine: &Arc<Engine>, match_id: Option<String>) -> anyhow::Result<()> {
+    let store = engine.frame_store().cloned().context("no frames folder")?;
+    let (settings, account, live) = engine
+        .db()
+        .call(move |c| {
+            let account = rc_store::accounts::primary_account(c)?;
+            let live = match match_id {
+                Some(id) => rc_store::live::by_match(c, &id)?,
+                None => rc_store::live::recent(c, 20)?.into_iter().find(|g| g.match_id.is_some()),
+            };
+            Ok((rc_store::settings::app(c)?, account, live))
+        })
+        .await?;
+    let account = account.context("no account tracked yet")?;
+    let live = live.context("no recorded live game for that match")?;
+    let match_id = live.match_id.clone().context("that game isn't linked to a match yet")?;
+    println!("{match_id}: {} screenshots on disk", store.list(live.id).len());
+    let client = rc_coach::provider::vision_client(&settings.vision)?;
+    println!("Reviewing with {} {} ...", settings.vision.provider, settings.vision.model);
+    let opts = rc_coach::vision::VisionOptions::from_settings(&settings);
+    let report =
+        rc_coach::vision::vision_review(engine.db(), &client, &store, account.id, &match_id, live.id, &opts).await?;
+    let (live_id, report_id) = (live.id, report.id);
+    engine.db().call(move |c| rc_store::live::set_vision_report(c, live_id, report_id)).await?;
+    store.delete(live.id)?;
+    println!(
+        "Saved report {} ({} tokens in, {} out); screenshots deleted.",
+        report.id,
+        report.input_tokens.unwrap_or(0),
+        report.output_tokens.unwrap_or(0)
+    );
+    Ok(())
 }
 
 async fn vision_capture(
@@ -246,6 +283,7 @@ async fn main() -> anyhow::Result<()> {
                 Command::RecordFixtures { riot_id, platform, matches, out } => {
                     fixtures::record(engine.riot(), &riot_id, platform, matches, &out).await
                 }
+                Command::VisionReview { match_id } => vision_review(&engine, match_id).await,
                 Command::ScrubFixtures { .. }
                 | Command::Summary
                 | Command::MockLive { .. }

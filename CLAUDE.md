@@ -28,7 +28,8 @@ PC. Full product spec: `SPEC.md`. Architecture notes: `docs/architecture.md`.
   that crosses these lines. LCU use requires product registration first.
 - **AI keys** follow the same rules: stored only in Windows Credential Manager
   (`rc_common::credentials`, entries `RiftCoach:<name>`), sent only as sensitive
-  headers, scrubbed from provider error text. The AI gets only the facts object
+  headers, scrubbed from provider error text. `max_tokens` in requests/settings is the answer length; `rc-ai` adds
+  `THINKING_ROOM` for frontier providers because thinking counts against their output limit. The AI gets only the facts object
   (`rc_coach::facts`), never raw API dumps or other players' Riot IDs.
 - **Keep `README.md` current.** It is both the GitHub README and the in-app
   Guide page (`ui/src/pages/Guide.tsx` imports it). Update it in the same change
@@ -57,6 +58,7 @@ If `cargo` isn't on PATH in an old shell: `$env:PATH = "$env:USERPROFILE\.cargo\
 | Mock live game (no League needed) | `cargo run -p rc-cli -- mock-live --speed 10 [--mode CLASSIC] [--champion Ahri]` (defaults: primary account, most played champion), then run the app with `$env:RIFT_COACH_LIVE_URL = "http://127.0.0.1:2998"` |
 | MCP over stdio (read-only, real DB) | `cargo build -p rift-coach` then pipe JSON-RPC lines into `target\debug\rift-coach.exe --mcp-stdio` |
 | Vision capture cost (any window) | `cargo run --release -p rc-cli -- vision-capture --window "<title part>" [--interval 3] [--width 1280]` |
+| Vision review of a recorded game now (real AI call; deletes its frames on success) | `cargo run --release -p rc-cli -- vision-review [MATCH_ID]` |
 | Real capture through the poller | `$env:RIFT_COACH_VISION_WINDOW = "<title part>"; cargo test -p rc-jobs --test live -- --ignored vision` (the window must keep redrawing) |
 | Installer (release build) | `npm run tauri build` → `target\release\bundle\nsis\`; set `TAURI_SIGNING_PRIVATE_KEY` (contents of `%USERPROFILE%\.tauri\rift-coach-updater.key`) to also sign the updater artifacts |
 | Status / role summary | `cargo run -p rc-cli -- status` / `-- summary` |

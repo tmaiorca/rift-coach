@@ -11,9 +11,16 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-const TIMEOUT: Duration = Duration::from_secs(180);
+const TIMEOUT: Duration = Duration::from_secs(300);
 /// Requests with images upload a few MB and take longer to answer.
-const IMAGE_TIMEOUT: Duration = Duration::from_secs(360);
+const IMAGE_TIMEOUT: Duration = Duration::from_secs(600);
+/// Room for reasoning on top of the answer's `max_tokens`: Claude (adaptive
+/// thinking), OpenAI reasoning models and Gemini thinking models count their
+/// thinking against the output limit, and can use all of it before writing a
+/// word. Only tokens actually used are billed.
+pub const THINKING_ROOM: u32 = 16_000;
+/// Highest output limit sent (the current frontier models allow at least this).
+const MAX_OUTPUT: u32 = 64_000;
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +117,7 @@ impl ProviderConfig {
 pub struct CompletionRequest {
     pub system: String,
     pub user: String,
+    /// Length of the answer. Frontier providers also get `THINKING_ROOM`.
     pub max_tokens: u32,
     /// Ask the provider for JSON output where it supports a JSON mode.
     pub json: bool,
@@ -266,6 +274,12 @@ impl AiClient {
         tracing::info!(provider = self.config.kind.as_str(), model, images = req.images.len(), "AI request");
         let timeout = if req.images.is_empty() { TIMEOUT } else { IMAGE_TIMEOUT };
         let post = |url: String, body: &Value| self.http.post(url).timeout(timeout).json(body);
+        // Local OpenAI-compatible servers may not reason, and a large limit can
+        // exceed their context; they get the answer length only.
+        let limit = match self.config.kind {
+            ProviderKind::OpenAiCompatible => req.max_tokens,
+            _ => req.max_tokens.saturating_add(THINKING_ROOM).min(MAX_OUTPUT),
+        };
         match self.config.kind {
             ProviderKind::Anthropic => {
                 let content = if req.images.is_empty() {
@@ -283,7 +297,7 @@ impl AiClient {
                 };
                 let body = json!({
                     "model": model,
-                    "max_tokens": req.max_tokens,
+                    "max_tokens": limit,
                     "system": req.system,
                     "messages": [{"role": "user", "content": content}],
                 });
@@ -298,8 +312,11 @@ impl AiClient {
                             .collect::<String>()
                     })
                     .unwrap_or_default();
+                if text.trim().is_empty() {
+                    return Err(AiError::BadResponse(anthropic_empty(&v)));
+                }
                 Ok(Completion {
-                    text: non_empty(text)?,
+                    text,
                     input_tokens: v["usage"]["input_tokens"].as_i64(),
                     output_tokens: v["usage"]["output_tokens"].as_i64(),
                 })
@@ -329,23 +346,30 @@ impl AiClient {
                     ],
                 });
                 if self.config.kind == ProviderKind::OpenAi {
-                    body["max_completion_tokens"] = json!(req.max_tokens);
+                    body["max_completion_tokens"] = json!(limit);
                     if req.json {
                         body["response_format"] = json!({"type": "json_object"});
                     }
                 } else {
-                    body["max_tokens"] = json!(req.max_tokens);
+                    body["max_tokens"] = json!(limit);
                 }
                 let v = self.send(post(format!("{base}/chat/completions"), &body)).await?;
                 let text = v["choices"][0]["message"]["content"].as_str().unwrap_or_default().to_owned();
+                if text.trim().is_empty() {
+                    return Err(AiError::BadResponse(format!(
+                        "empty completion (finish_reason {}, {} output tokens)",
+                        v["choices"][0]["finish_reason"].as_str().unwrap_or("none"),
+                        v["usage"]["completion_tokens"].as_i64().map_or("?".into(), |n| n.to_string()),
+                    )));
+                }
                 Ok(Completion {
-                    text: non_empty(text)?,
+                    text,
                     input_tokens: v["usage"]["prompt_tokens"].as_i64(),
                     output_tokens: v["usage"]["completion_tokens"].as_i64(),
                 })
             }
             ProviderKind::Gemini => {
-                let mut config = json!({"maxOutputTokens": req.max_tokens});
+                let mut config = json!({"maxOutputTokens": limit});
                 if req.json {
                     config["responseMimeType"] = json!("application/json");
                 }
@@ -365,8 +389,15 @@ impl AiClient {
                     .as_array()
                     .map(|parts| parts.iter().filter_map(|p| p["text"].as_str()).collect::<String>())
                     .unwrap_or_default();
+                if text.trim().is_empty() {
+                    return Err(AiError::BadResponse(format!(
+                        "empty completion (finishReason {}, {} thinking tokens)",
+                        v["candidates"][0]["finishReason"].as_str().unwrap_or("none"),
+                        v["usageMetadata"]["thoughtsTokenCount"].as_i64().map_or("?".into(), |n| n.to_string()),
+                    )));
+                }
                 Ok(Completion {
-                    text: non_empty(text)?,
+                    text,
                     input_tokens: v["usageMetadata"]["promptTokenCount"].as_i64(),
                     output_tokens: v["usageMetadata"]["candidatesTokenCount"].as_i64(),
                 })
@@ -414,8 +445,17 @@ fn ids(v: &Value, field: &str) -> Vec<String> {
     v.as_array().map(|a| a.iter().filter_map(|m| m[field].as_str().map(str::to_owned)).collect()).unwrap_or_default()
 }
 
-fn non_empty(text: String) -> Result<String, AiError> {
-    if text.trim().is_empty() { Err(AiError::BadResponse("empty completion".into())) } else { Ok(text) }
+/// Why an Anthropic reply had no text: its stop reason, block types and
+/// output tokens (never its content).
+fn anthropic_empty(v: &Value) -> String {
+    let blocks: Vec<&str> =
+        v["content"].as_array().map(|a| a.iter().filter_map(|p| p["type"].as_str()).collect()).unwrap_or_default();
+    format!(
+        "empty completion (stop_reason {}, blocks [{}], {} output tokens)",
+        v["stop_reason"].as_str().unwrap_or("none"),
+        blocks.join(", "),
+        v["usage"]["output_tokens"].as_i64().map_or("?".into(), |n| n.to_string()),
+    )
 }
 
 /// Pulls a readable message out of a provider error body.

@@ -8,13 +8,13 @@ publish.workspace = true
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-rc-ai = { version = "0.2.0", path = "../ai" }
-rc-common = { version = "0.2.0", path = "../common" }
-rc-live = { version = "0.2.0", path = "../live" }
-rc-metrics = { version = "0.2.0", path = "../metrics" }
-rc-signals = { version = "0.2.0", path = "../signals" }
-rc-store = { version = "0.2.0", path = "../store" }
-rc-vision = { version = "0.2.0", path = "../vision" }
+rc-ai = { version = "0.2.1", path = "../ai" }
+rc-common = { version = "0.2.1", path = "../common" }
+rc-live = { version = "0.2.1", path = "../live" }
+rc-metrics = { version = "0.2.1", path = "../metrics" }
+rc-signals = { version = "0.2.1", path = "../signals" }
+rc-store = { version = "0.2.1", path = "../store" }
+rc-vision = { version = "0.2.1", path = "../vision" }
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

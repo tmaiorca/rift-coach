@@ -26,7 +26,7 @@ async fn anthropic_messages() {
         .and(path("/v1/messages"))
         .and(header("x-api-key", "k1"))
         .and(header("anthropic-version", "2023-06-01"))
-        .and(body_partial_json(json!({"model": "test-model", "system": "sys", "max_tokens": 100})))
+        .and(body_partial_json(json!({"model": "test-model", "system": "sys", "max_tokens": 16_100})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "content": [{"type": "text", "text": "{\"ok\":true}"}],
             "usage": {"input_tokens": 12, "output_tokens": 5}
@@ -45,7 +45,7 @@ async fn openai_chat_with_json_mode() {
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
         .and(header("authorization", "Bearer k2"))
-        .and(body_partial_json(json!({"response_format": {"type": "json_object"}, "max_completion_tokens": 100})))
+        .and(body_partial_json(json!({"response_format": {"type": "json_object"}, "max_completion_tokens": 16_100})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "choices": [{"message": {"content": "{}"}}],
             "usage": {"prompt_tokens": 3, "completion_tokens": 1}
@@ -77,7 +77,9 @@ async fn gemini_generate_content() {
     Mock::given(method("POST"))
         .and(path("/v1beta/models/test-model:generateContent"))
         .and(header("x-goog-api-key", "k3"))
-        .and(body_partial_json(json!({"generationConfig": {"responseMimeType": "application/json"}})))
+        .and(body_partial_json(
+            json!({"generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 16_100}}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "candidates": [{"content": {"parts": [{"text": "{\"a\":"}, {"text": "1}"}]}}],
             "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 2}
@@ -87,6 +89,22 @@ async fn gemini_generate_content() {
         .await;
     let c = client(ProviderKind::Gemini, &server, Some("k3")).complete(&req()).await.expect("ok");
     assert_eq!(c.text, "{\"a\":1}");
+}
+
+#[tokio::test]
+async fn thinking_only_reply_says_why() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "content": [{"type": "thinking", "thinking": "..."}],
+            "stop_reason": "max_tokens",
+            "usage": {"input_tokens": 9, "output_tokens": 16_100}
+        })))
+        .mount(&server)
+        .await;
+    let err = client(ProviderKind::Anthropic, &server, Some("k1")).complete(&req()).await.expect_err("empty");
+    let msg = err.to_string();
+    assert!(msg.contains("stop_reason max_tokens") && msg.contains("[thinking]") && msg.contains("16100"), "{msg}");
 }
 
 #[tokio::test]
